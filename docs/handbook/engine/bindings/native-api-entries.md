@@ -141,7 +141,7 @@ class world;
 | Name | Type | Value | Description |
 |---|---|---|---|
 | <a id="variable-BINDINGS_ENTRY_COUNT"></a><code>BINDINGS_ENTRY_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="na">CONJURE_<wbr>NATIVE_<wbr>API_<wbr>ENTRY_<wbr>COUNT</span> - <span class="na">CONJURE_<wbr>NATIVE_<wbr>API_<wbr>CORE_<wbr>ENTRY_<wbr>COUNT</span></code> | Number of bindings-owned entries (everything after the marker of <code>native_api.inl</code>). |
-| <a id="variable-BINDINGS_GROUP_COUNT"></a><code>BINDINGS_GROUP_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="mi">10</span></code> | Number of groups the bindings own. |
+| <a id="variable-BINDINGS_GROUP_COUNT"></a><code>BINDINGS_GROUP_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="mi">11</span></code> | Number of groups the bindings own. |
 
 ## Macros
 

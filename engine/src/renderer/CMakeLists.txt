@@ -48,6 +48,8 @@ set(CONJURE_RENDERER_SOURCES
     culling.cpp
     culling.h
     debug_draw.cpp
+    debug_font.cpp
+    debug_font.h
     draw_list_builder.cpp
     draw_list_builder.h
     exposure_math.cpp

@@ -18,6 +18,9 @@
 #if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
     #include "conjure/renderer/renderer.h"
 #endif
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+    #include "conjure/scripting/script_runtime.h"
+#endif
 
 #include <algorithm>
 #include <utility>
@@ -204,6 +207,15 @@ core::result<void> frame_loop::run_frame(std::optional<f64> deltaOverride) {
         mSample.frameMemoryHighWater = mServices->frameMemory->stats().highWaterBytes;
     }
     mSample.droppedFixedTime = app.mTime.droppedFixedTime;
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+    if (mServices->scripting != nullptr) {
+        const scripting::managed_memory_delta managed = mServices->scripting->sample_managed_memory();
+        mSample.managedAllocatedBytes = managed.allocatedBytes;
+        mSample.managedHeapBytes = managed.heapBytes;
+        mSample.managedCollections = managed.collections;
+        mSample.managedFullCollections = managed.fullCollections;
+    }
+#endif
     app.mStats.commit(mSample);
 
     // 16. Frame budget.

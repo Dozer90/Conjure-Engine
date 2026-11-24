@@ -38,8 +38,10 @@ CONJURE_NATIVE_FN(component, add,                  int32_t,   (uint64_t entity, 
 CONJURE_NATIVE_FN(component, remove,               int32_t,   (uint64_t entity, uint32_t typeId))
 CONJURE_NATIVE_FN(component, get,                  int32_t,   (uint64_t entity, uint32_t typeId, void *out))
 CONJURE_NATIVE_FN(component, set,                  int32_t,   (uint64_t entity, uint32_t typeId, const void *data))
+// query_begin: the chunks holding every id of 'ids' (1..8) and none of 'withoutIds' (0..8, may be null when
+// withoutCount is 0, never one of 'ids')
 CONJURE_NATIVE_FN(query, begin, int32_t,
-  (const uint32_t *ids, int32_t count, conjure_query_scope *out))
+  (const uint32_t *ids, int32_t count, const uint32_t *withoutIds, int32_t withoutCount, conjure_query_scope *out))
 CONJURE_NATIVE_FN(query,     end,                  void,      (uint32_t scopeId))
 // --- bindings (R26) ---
 // transform_*  (scene::local_transform / world_transform; get_world* compose locals up the parent chain)
@@ -89,7 +91,8 @@ CONJURE_NATIVE_FN(prefab,    instantiate_many,     int32_t,
   (const conjure_uuid *prefab, uint64_t parent, int32_t count, uint64_t *outRoots))
 CONJURE_NATIVE_FN(prefab,    source_of,            int32_t,   (uint64_t entity, conjure_uuid *outPrefab))
 CONJURE_NATIVE_FN(prefab,    is_instance_root,     int32_t,   (uint64_t entity))
-// physics_*  (physics::physics_world; body entries need rigid_body, character entries need character_controller)
+// physics_*  (physics::physics_world; body entries need rigid_body, character entries need character_controller;
+// the query flags are conjure_query_flags)
 CONJURE_NATIVE_FN(physics, raycast, int32_t,
   (const conjure_ray_query *query, conjure_raycast_hit *outHit))
 CONJURE_NATIVE_FN(physics,   raycast_all,          int32_t,
@@ -97,10 +100,11 @@ CONJURE_NATIVE_FN(physics,   raycast_all,          int32_t,
 CONJURE_NATIVE_FN(physics, shape_cast, int32_t,
   (const conjure_shape_query *query, conjure_raycast_hit *outHit))
 CONJURE_NATIVE_FN(physics,   overlap_sphere,       int32_t,
-  (const conjure_vec3 *center, float radius, uint32_t layerMask, uint64_t *out, int32_t capacity))
+  (const conjure_vec3 *center, float radius, uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity,
+  uint64_t *out, int32_t capacity))
 CONJURE_NATIVE_FN(physics,   overlap_box,          int32_t,
   (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation,
-  uint32_t layerMask, uint64_t *out, int32_t capacity))
+  uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity))
 CONJURE_NATIVE_FN(physics,   get_linear_velocity,  int32_t,   (uint64_t entity, conjure_vec3 *out))
 CONJURE_NATIVE_FN(physics,   set_linear_velocity,  int32_t,   (uint64_t entity, const conjure_vec3 *value))
 CONJURE_NATIVE_FN(physics,   get_angular_velocity, int32_t,   (uint64_t entity, conjure_vec3 *out))
@@ -185,3 +189,14 @@ CONJURE_NATIVE_FN(modules,   name,                 int32_t,   (int32_t index, ch
 // Appended at the end, not beside entity_get_tag: entries are never reordered within CONJURE_NATIVE_API_VERSION
 // (only the layout hash changes). entity_get_tag_text, code sweep OWN-TAG.
 CONJURE_NATIVE_FN(entity,    get_tag_text,         int32_t,   (uint64_t entity, char *utf8, int32_t capacity))
+// Appended for wave 3 (GAP-CSHARP); version 3. entity_spawn creates desc->count entities with their components in
+// one call and returns the count or -status.
+CONJURE_NATIVE_FN(entity,    spawn,                int32_t,   (const conjure_spawn_desc *desc, uint64_t *outEntities))
+// camera_*  (renderer::camera_component; current world pose; pixels, origin top-left)
+CONJURE_NATIVE_FN(camera,    main,                 uint64_t,  (void))
+CONJURE_NATIVE_FN(camera,    screen_ray,           int32_t,
+  (uint64_t camera, const conjure_vec2 *screenPixels, conjure_vec3 *outOrigin, conjure_vec3 *outDirection))
+CONJURE_NATIVE_FN(camera,    screen_to_world,      int32_t,
+  (uint64_t camera, const conjure_vec3 *screenPixelsAndDepth, conjure_vec3 *outWorld))
+CONJURE_NATIVE_FN(camera,    world_to_screen,      int32_t,
+  (uint64_t camera, const conjure_vec3 *world, conjure_vec3 *outScreenPixelsAndDepth))

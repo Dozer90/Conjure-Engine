@@ -237,6 +237,10 @@ int32_t conjure::bindings::entries::diagnostics_frame_stats(conjure_frame_stats_
     out->fixed_steps = sample.fixedSteps;
     out->jobs_executed = sample.jobsExecuted;
     out->frame_memory_high_water = static_cast<uint64_t>(sample.frameMemoryHighWater);
+    out->managed_allocated_bytes = sample.managedAllocatedBytes;
+    out->managed_heap_bytes = sample.managedHeapBytes;
+    out->managed_collections = sample.managedCollections;
+    out->managed_full_collections = sample.managedFullCollections;
     return 0;
 }
 

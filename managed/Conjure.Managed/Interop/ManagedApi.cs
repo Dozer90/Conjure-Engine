@@ -28,6 +28,8 @@ public unsafe struct ManagedApi
     public delegate* unmanaged<int, byte*, int, int> CollectFields;
     public delegate* unmanaged<int> CollectGarbage;
     public delegate* unmanaged<int> Shutdown;
+    public delegate* unmanaged<ManagedMemory*, int> SampleMemory;
+    public delegate* unmanaged<int*, int, int, int> SetActive;
 }
 
 /// <summary>
@@ -180,6 +182,39 @@ internal static unsafe class ManagedEntryPoints
         }
     }
 
+    [UnmanagedCallersOnly]
+    public static int SampleMemory(ManagedMemory* memory)
+    {
+        try
+        {
+            if (memory == null)
+            {
+                return StatusFailure;
+            }
+            *memory = ScriptRuntime.SampleMemory();
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            NativeBridge.Log(LogLevel.Error, "SampleMemory failed: " + exception);
+            return StatusFailure;
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static int SetActive(int* slots, int count, int active)
+    {
+        try
+        {
+            return ScriptRuntime.SetActive(slots, count, active != 0);
+        }
+        catch (Exception exception)
+        {
+            NativeBridge.Log(LogLevel.Error, "SetActive failed: " + exception);
+            return StatusFailure;
+        }
+    }
+
     /// <summary>
     /// Fills the table native reads.
     /// </summary>
@@ -198,5 +233,7 @@ internal static unsafe class ManagedEntryPoints
         api->CollectFields = &CollectFields;
         api->CollectGarbage = &CollectGarbage;
         api->Shutdown = &Shutdown;
+        api->SampleMemory = &SampleMemory;
+        api->SetActive = &SetActive;
     }
 }

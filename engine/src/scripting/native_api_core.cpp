@@ -571,7 +571,13 @@ namespace {
     /*---------------------------------------------------------------*/
     // query_*
 
-    int32_t entry_query_begin(const uint32_t *ids, int32_t count, conjure_query_scope *out) {
+    int32_t entry_query_begin(
+      const uint32_t *ids,
+      int32_t count,
+      const uint32_t *withoutIds,
+      int32_t withoutCount,
+      conjure_query_scope *out
+    ) {
         script_runtime *runtime = active_runtime();
         if (runtime == nullptr) {
             return status_of(scripting_error::NOT_INITIALISED);
@@ -579,8 +585,16 @@ namespace {
         if (ids == nullptr || out == nullptr || count <= 0) {
             return status_of(scripting_error::NOT_SUPPORTED);
         }
+        // An empty exclusion list may come without a pointer; a non-empty one needs it.
+        if (withoutCount < 0 || (withoutCount > 0 && withoutIds == nullptr)) {
+            return status_of(scripting_error::NOT_SUPPORTED);
+        }
         const std::span<const u32> typeIds(ids, static_cast<usize>(count));
-        const core::result<u32> opened = runtime->begin_query_scope(typeIds, *out);
+        std::span<const u32> excludedIds = {};
+        if (withoutCount > 0) {
+            excludedIds = std::span<const u32>(withoutIds, static_cast<usize>(withoutCount));
+        }
+        const core::result<u32> opened = runtime->begin_query_scope(typeIds, excludedIds, *out);
         if (opened.has_value()) {
             return 0;
         }

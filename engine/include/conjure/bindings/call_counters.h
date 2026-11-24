@@ -71,7 +71,7 @@ namespace conjure::bindings {
     [[nodiscard]] CONJURE_API native_function_id find_function(std::string_view fullName) noexcept;
 
     /// <summary>
-    /// True when the entry belongs to one of the ten bindings groups (everything after the R26 marker).
+    /// True when the entry belongs to one of the eleven bindings groups (everything after the R26 marker).
     /// </summary>
     [[nodiscard]] constexpr bool is_bindings_owned(native_function_id id) noexcept {
         const u32 index = static_cast<u32>(id);

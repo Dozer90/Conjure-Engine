@@ -325,6 +325,31 @@ public static unsafe class ScriptRuntime
     }
 
     /// <summary>
+    /// The managed heap counters native samples once per frame (conjure_managed_memory): the bytes the calling
+    /// thread (the main thread) allocated since the runtime started, the heap size without forcing a collection,
+    /// and the gen 0 and gen 2 collections so far. Allocates nothing; threads that scripts start are not counted.
+    /// </summary>
+    public static ManagedMemory SampleMemory()
+    {
+        ManagedMemory memory = default;
+        memory.ThreadAllocatedBytes = (ulong)GC.GetAllocatedBytesForCurrentThread();
+        memory.HeapBytes = (ulong)GC.GetTotalMemory(false);
+        memory.Gen0Collections = (uint)GC.CollectionCount(0);
+        memory.Gen2Collections = (uint)GC.CollectionCount(2);
+        return memory;
+    }
+
+    /// <summary>
+    /// Native reports that the entities of the instances in 'slots' became active or inactive (conjure_managed_api
+    /// set_active). Returns how many instances changed state. Instances do not track their entity's activity in
+    /// this version, so no instance changes state and the result is 0; the slots are not read.
+    /// </summary>
+    public static int SetActive(int* slots, int count, bool active)
+    {
+        return 0;
+    }
+
+    /// <summary>
     /// Destroys every instance (OnDestroy), unloads every load context, clears the tables and forgets the
     /// native table: the host that provided it may be freed right after this call, so nothing managed may
     /// dereference it until the next handshake (a later log from a background thread is dropped).

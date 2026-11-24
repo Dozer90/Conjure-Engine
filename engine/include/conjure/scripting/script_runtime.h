@@ -26,6 +26,7 @@
 #include "conjure/ecs/world.h"
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -69,6 +70,20 @@ namespace conjure::scripting {
     };
 
     /// <summary>
+    /// The managed heap figures of one frame (script_runtime::sample_managed_memory). allocatedBytes and the
+    /// collections are what happened since the previous sample on the main thread's managed heap; heapBytes is the
+    /// heap size now. Threads that scripts start are not counted.
+    /// </summary>
+    struct managed_memory_delta {
+        u64 allocatedBytes = 0;
+        u64 heapBytes = 0;
+        u32 collections = 0;        // collections of any generation (every one collects gen 0)
+        u32 fullCollections = 0;    // gen 2 collections
+
+        [[nodiscard]] bool operator==(const managed_memory_delta &) const = default;
+    };
+
+    /// <summary>
     /// Snapshot of the runtime's size for diagnostics and tests.
     /// </summary>
     struct script_runtime_stats {
@@ -79,7 +94,7 @@ namespace conjure::scripting {
         u32 openQueryScopes = 0;
         u32 reloadCount = 0;
         u32 zombieAssemblies = 0;
-        u32 cachedQueries = 0;      // ecs::query objects kept per component set for the DOD scopes
+        u32 cachedQueries = 0;      // ecs::query objects kept per (with, without) set pair for the DOD scopes
     };
 
     class CONJURE_API script_runtime {
@@ -129,11 +144,17 @@ namespace conjure::scripting {
             };
 
             /// <summary>
-            /// The component ids of a scope sorted ascending, without repeats and padded with
-            /// component_id::INVALID: the same set in any order, {a, a} included, finds the same cached query
-            /// (columns still follow the request order).
+            /// The component ids a scope requires ('with') and excludes ('without'), each sorted ascending,
+            /// without repeats and padded with component_id::INVALID: the same sets in any order, {a, a} included,
+            /// find the same cached query (columns still follow the request order), and {a} without {b} is a
+            /// different query from {a}.
             /// </summary>
-            using query_cache_key = std::array<u16, static_cast<usize>(QUERY_MAX_COMPONENTS)>;
+            struct query_cache_key {
+                std::array<u16, static_cast<usize>(QUERY_MAX_COMPONENTS)> with = {};
+                std::array<u16, static_cast<usize>(QUERY_MAX_COMPONENTS)> without = {};
+
+                [[nodiscard]] auto operator<=>(const query_cache_key &) const = default;
+            };
 
             std::unique_ptr<script_host> mHost = nullptr;
             conjure_native_api mNativeApi = {};
@@ -150,7 +171,7 @@ namespace conjure::scripting {
             // scope's lifetime: open scopes (oldest first) and the finished states kept for reuse.
             std::vector<std::unique_ptr<query_scope_state>> mQueryScopes = {};
             std::vector<std::unique_ptr<query_scope_state>> mFreeQueryScopes = {};
-            core::flat_map<query_cache_key, ecs::query> mQueryCache = {};      // one query per component set
+            core::flat_map<query_cache_key, ecs::query> mQueryCache = {};      // one query per (with, without) set pair
             // Ids reserved in mDeferredCommands, kept until the flush; clear() keeps the table's capacity.
             core::flat_hash_map<ecs::entity, deferred_reservation> mDeferredReserved = {};
             core::memory::frame_allocator mScratch;                           // no default: sized by the constructor
@@ -175,6 +196,8 @@ namespace conjure::scripting {
             std::vector<conjure_collision_record> mCollisionRecords = {};   // dispatch_collision_events' batch
             std::unordered_map<ecs::entity, std::string> mEntityNames = {};
             std::function<std::span<const collision_event>()> mCollisionSource = {};
+            conjure_managed_memory mManagedMemoryBaseline = {};   // the previous sample_managed_memory counters
+            bool mHasManagedMemoryBaseline = false;
 
         public:
             explicit script_runtime(std::unique_ptr<script_host> host);
@@ -447,12 +470,23 @@ namespace conjure::scripting {
             // DOD query scopes (3.9)
 
             /// <summary>
-            /// Opens a scope over the archetypes holding every type: locks the world, fills the chunk views
-            /// (columns in 'typeIds' order, null for an absent id), bumps the change versions of the written
-            /// columns. WRONG_THREAD, NOT_IN_PHASE, NOT_INITIALISED, INVALID_ARGUMENT (no world, bad id;
-            /// id 0 is never valid, R4). Allocation-free once warm: the ecs::query behind a component set is
-            /// cached for the life of the attached world (cached_query_count()) and finished scope states
-            /// are reused, so the scripting.update_10k_dod gate of 08_testing.md 7.1 holds.
+            /// Opens a scope over the archetypes holding every type of 'typeIds' (1..8) and none of 'withoutIds'
+            /// (0..8): locks the world, fills the chunk views (columns in 'typeIds' order, null for an absent
+            /// id), bumps the change versions of the written columns (only 'typeIds' are columns). WRONG_THREAD,
+            /// NOT_IN_PHASE, NOT_INITIALISED, INVALID_ARGUMENT (no world, a bad or unregistered id in either
+            /// list, a without id that is also in 'typeIds'; id 0 is never valid, R4). Allocation-free once warm:
+            /// the ecs::query behind a pair of component sets is cached for the life of the attached world
+            /// (cached_query_count()) and finished scope states are reused, so the scripting.update_10k_dod gate
+            /// of 08_testing.md 7.1 holds.
+            /// </summary>
+            [[nodiscard]] core::result<u32> begin_query_scope(
+              std::span<const u32> typeIds,
+              std::span<const u32> withoutIds,
+              conjure_query_scope &out
+            );
+
+            /// <summary>
+            /// begin_query_scope(typeIds, {}, out): a scope that excludes nothing.
             /// </summary>
             [[nodiscard]] core::result<u32> begin_query_scope(std::span<const u32> typeIds, conjure_query_scope &out);
 
@@ -467,7 +501,8 @@ namespace conjure::scripting {
             }
 
             /// <summary>
-            /// Distinct component sets begin_query_scope has cached a query for since the world was attached.
+            /// Distinct (with, without) component set pairs begin_query_scope has cached a query for since the
+            /// world was attached.
             /// </summary>
             [[nodiscard]] u32 cached_query_count() const noexcept {
                 return static_cast<u32>(mQueryCache.size());
@@ -617,6 +652,15 @@ namespace conjure::scripting {
             }
 
             [[nodiscard]] script_runtime_stats stats() const noexcept;
+
+            /// <summary>
+            /// Samples the managed heap through conjure_managed_api::sample_memory (the engine calls it once per
+            /// frame, at step 15 of 06_engine_loop.md, on the main thread) and returns what changed since the
+            /// previous sample. Every field is 0 without a ready host or when the sample fails, and the next
+            /// sample then starts over. The first sample after initialise, and a sample whose cumulative counters
+            /// went down (the managed runtime restarted), report the heap size and 0 for the rest.
+            /// </summary>
+            [[nodiscard]] managed_memory_delta sample_managed_memory();
 
             /// <summary>
             /// Fires after a successful reload (editor refreshes inspectors).

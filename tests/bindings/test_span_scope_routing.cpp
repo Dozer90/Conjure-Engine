@@ -51,7 +51,7 @@ namespace {
             conjure_native_api &api = base.api();
             base.null_host().set_phase_hook([&](scripting::script_phase, f32) {
                 conjure_query_scope scope = {};
-                REQUIRE(api.query_begin(transformIds.data(), 1, &scope) == 0);
+                REQUIRE(api.query_begin(transformIds.data(), 1, nullptr, 0, &scope) == 0);
                 REQUIRE(base.world.is_locked());
                 body(scope);
                 if (close) {

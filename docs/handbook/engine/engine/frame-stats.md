@@ -17,7 +17,7 @@ kind: header
 
 | File | Description |
 |---|---|
-| [`frame_sample`](frame-stats/frame-sample.md) |  |
+| [`frame_sample`](frame-stats/frame-sample.md) | One frame&#x27;s statistics. The managed fields come from <code>script_runtime::sample_managed_memory</code> at step 15: what the main thread allocated on the managed heap and the collections during the frame, and the heap size after it; all 0 without a ready script host (or in a build without scripting). |
 
 ## Classes
 

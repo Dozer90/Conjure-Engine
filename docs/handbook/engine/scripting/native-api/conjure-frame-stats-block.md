@@ -35,6 +35,10 @@ struct conjure_frame_stats_block
 <tr><td>public</td><td><code class="signature">frame_<wbr>memory_<wbr>high_<wbr>water</code></td><td><code class="signature">uint64_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">frame_ms</code></td><td><code class="signature"><span class="k">float</span></code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">jobs_<wbr>executed</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">managed_<wbr>allocated_<wbr>bytes</code></td><td><code class="signature">uint64_t</code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">managed_<wbr>collections</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">managed_<wbr>full_<wbr>collections</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">managed_<wbr>heap_<wbr>bytes</code></td><td><code class="signature">uint64_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">phase_ms</code></td><td><code class="signature"><span class="k">float</span>[<span class="na">10</span>]</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">submit_ms</code></td><td><code class="signature"><span class="k">float</span></code></td><td>—</td><td></td></tr>
 </tbody>

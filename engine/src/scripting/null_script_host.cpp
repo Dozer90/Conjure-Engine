@@ -99,6 +99,13 @@ void null_host_recorder::record_apply(const apply_record &record) {
     mApplies.push_back(record);
 }
 
+void null_host_recorder::record_activity(const activity_record &record) {
+    if (!admits(mActivities.size())) {
+        return;
+    }
+    mActivities.push_back(record);
+}
+
 void null_host_recorder::record_load(std::string path) {
     if (!admits(mLoadedAssemblies.size())) {
         return;
@@ -120,6 +127,10 @@ void null_host_recorder::record_shutdown() {
 
 void null_host_recorder::record_collect_fields() {
     ++mCollectFieldsCount;
+}
+
+void null_host_recorder::record_sample_memory() {
+    ++mSampleMemoryCount;
 }
 
 bool null_host_recorder::admits(usize listSize) noexcept {
@@ -171,6 +182,8 @@ core::result<void> null_script_host::initialise(const script_host_config &config
     mManagedApi.collect_fields = &trampoline_collect_fields;
     mManagedApi.collect_garbage = &trampoline_collect_garbage;
     mManagedApi.shutdown = &trampoline_shutdown;
+    mManagedApi.sample_memory = &trampoline_sample_memory;
+    mManagedApi.set_active = &trampoline_set_active;
     mStatus = script_host_status::READY;
     mRecorder.record_call("initialise");
     return core::result<void>::success();
@@ -245,6 +258,14 @@ void null_script_host::set_collect_override(i32 slot, std::vector<u8> blob) {
     mSlots[static_cast<usize>(slot)].collectOverride = std::move(blob);
 }
 
+void null_script_host::set_managed_memory(const conjure_managed_memory &memory) noexcept {
+    mManagedMemory = memory;
+}
+
+void null_script_host::set_sample_memory_result(i32 result) noexcept {
+    mSampleMemoryResult = result;
+}
+
 void null_script_host::set_create_hook(create_hook hook) {
     mCreateHook = std::move(hook);
 }
@@ -265,12 +286,20 @@ void null_script_host::set_collision_hook(collision_hook hook) {
     mCollisionHook = std::move(hook);
 }
 
+void null_script_host::set_activity_hook(activity_hook hook) {
+    mActivityHook = std::move(hook);
+}
+
 bool null_script_host::is_slot_started(i32 slot) const noexcept {
     return is_slot_live(slot) && mSlots[static_cast<usize>(slot)].started;
 }
 
 bool null_script_host::is_slot_live(i32 slot) const noexcept {
     return slot >= 0 && static_cast<usize>(slot) < mSlots.size() && mSlots[static_cast<usize>(slot)].live;
+}
+
+bool null_script_host::is_slot_active(i32 slot) const noexcept {
+    return is_slot_live(slot) && mSlots[static_cast<usize>(slot)].active;
 }
 
 u64 null_script_host::slot_entity(i32 slot) const noexcept {
@@ -452,6 +481,7 @@ i32 null_script_host::create_instances(conjure_create_request *requests, i32 cou
         state.entity = request.entity;
         state.classHash = request.class_hash;
         state.started = (request.flags & CREATE_FLAG_ALREADY_STARTED) != 0;
+        state.active = (request.flags & CREATE_FLAG_INACTIVE) == 0;
         state.fields.assign(request.fields, request.fields + request.fields_size);
         request.out_slot = slot;
 
@@ -577,6 +607,46 @@ i32 null_script_host::collect_garbage() {
     mRecorder.record_call("collect_garbage");
     mRecorder.record_collect_garbage();
     return 0;
+}
+
+i32 null_script_host::sample_memory(conjure_managed_memory *out) {
+    // Not in calls(): the engine samples every frame, which would bury the calls a test looks for.
+    mRecorder.record_sample_memory();
+    if (mSampleMemoryResult != 0) {
+        return mSampleMemoryResult;
+    }
+    if (out == nullptr) {
+        return status_of(scripting_error::NOT_SUPPORTED);
+    }
+    *out = mManagedMemory;
+    return 0;
+}
+
+i32 null_script_host::set_active(const i32 *slots, i32 count, i32 active) {
+    mRecorder.record_call("set_active");
+    if (slots == nullptr || count <= 0) {
+        return 0;
+    }
+    const bool wantActive = active != 0;
+    i32 changed = 0;
+    for (i32 index = 0; index < count; ++index) {
+        const i32 slot = slots[index];
+        null_host_recorder::activity_record record = {};
+        record.slot = slot;
+        record.active = wantActive;
+        record.changed = is_slot_live(slot) && mSlots[static_cast<usize>(slot)].active != wantActive;
+        mRecorder.record_activity(record);
+        if (!record.changed) {
+            continue;
+        }
+        mSlots[static_cast<usize>(slot)].active = wantActive;
+        ++changed;
+        // The hook may create or destroy slots (as OnEnable may): no reference into mSlots survives it.
+        if (mActivityHook) {
+            mActivityHook(slot, wantActive);
+        }
+    }
+    return changed;
 }
 
 i32 null_script_host::shutdown_managed() {
@@ -715,4 +785,15 @@ i32 null_script_host::trampoline_collect_garbage() {
 
 i32 null_script_host::trampoline_shutdown() {
     return sActiveHost == nullptr ? status_of(scripting_error::NOT_INITIALISED) : sActiveHost->shutdown_managed();
+}
+
+i32 null_script_host::trampoline_sample_memory(conjure_managed_memory *out) {
+    return sActiveHost == nullptr ? status_of(scripting_error::NOT_INITIALISED) : sActiveHost->sample_memory(out);
+}
+
+i32 null_script_host::trampoline_set_active(const i32 *slots, i32 count, i32 active) {
+    if (sActiveHost == nullptr) {
+        return status_of(scripting_error::NOT_INITIALISED);
+    }
+    return sActiveHost->set_active(slots, count, active);
 }

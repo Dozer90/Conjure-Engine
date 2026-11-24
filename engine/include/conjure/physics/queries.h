@@ -35,7 +35,7 @@ namespace conjure::physics {
         f32 distance = 0.0f;                              // metres along the ray
         f32 fraction = 0.0f;                              // distance / maxDistance (clamped to 1e6 m)
         u8 layer = 0;
-        bool isTrigger = false;
+        bool isTrigger = false;                           // a trigger volume (hit only with includeTriggers)
 
         [[nodiscard]] bool operator==(const raycast_hit &) const = default;
     };
@@ -51,6 +51,7 @@ namespace conjure::physics {
         f32 fraction = 0.0f;                              // distance / maxDistance (clamped to 1e6 m)
         f32 penetrationDepth = 0.0f;                      // 0 from a clear start, approximate (often 0) if overlapping
         u8 layer = 0;
+        bool isTrigger = false;                           // a trigger volume (hit only with includeTriggers)
 
         [[nodiscard]] bool operator==(const shape_cast_hit &) const = default;
     };

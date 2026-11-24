@@ -35,10 +35,12 @@ set(CONJURE_ENGINE_TEST_SOURCES
     test_frame_pacer.cpp
     test_frame_stats.cpp
     test_game_layer.cpp
+    test_game_screen.cpp
     test_imgui_layer.cpp
     test_layer.cpp
     test_layer_stack.cpp
     test_log_category.cpp
+    test_main_camera.cpp
     test_main_thread_queue.cpp
     test_module_consumers.cpp
     test_phase_order.cpp

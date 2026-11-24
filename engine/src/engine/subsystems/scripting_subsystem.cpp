@@ -9,6 +9,7 @@
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/engine_time.h"
+#include "conjure/engine/game_screen.h"
 #include "conjure/engine/log_category.h"
 #include "conjure/engine/project.h"
 
@@ -198,7 +199,7 @@ void scripting_subsystem::begin_frame(engine_context &context) {
     }
     static const platform::input_state EMPTY_INPUT = {};
     const platform::input_state &input = mServices->input != nullptr ? mServices->input->snapshot() : EMPTY_INPUT;
-    write_frame_block(mServices->scripting->frame_block(), *context.time, input);
+    write_frame_block(mServices->scripting->frame_block(), *context.time, input, mServices->window.get());
     ++mFrameBlocksWritten;
 }
 
@@ -228,7 +229,8 @@ bool scripting_subsystem::headless_holds_scripts_back(const engine_config &confi
 void scripting_subsystem::write_frame_block(
   conjure_frame_block &block,
   const engine_time &time,
-  const platform::input_state &input
+  const platform::input_state &input,
+  const platform::window *window
 ) noexcept {
     block.time_seconds = time.time;
     block.unscaled_time_seconds = time.unscaledTime;
@@ -263,6 +265,24 @@ void scripting_subsystem::write_frame_block(
         }
         destination.connected = source.connected ? 1 : 0;
     }
+
+    const game_screen screen = game_screen_of(window);
+    block.screen_width = screen.pixels.x;
+    block.screen_height = screen.pixels.y;
+    block.content_scale_x = screen.contentScale.x;
+    block.content_scale_y = screen.contentScale.y;
+    block.ui_scale = screen.uiScale;
+    u8 windowState = 0;
+    if (screen.focused) {
+        windowState = static_cast<u8>(windowState | scripting::FRAME_WINDOW_FOCUSED);
+    }
+    if (screen.minimised) {
+        windowState = static_cast<u8>(windowState | scripting::FRAME_WINDOW_MINIMISED);
+    }
+    if (screen.fullscreen) {
+        windowState = static_cast<u8>(windowState | scripting::FRAME_WINDOW_FULLSCREEN);
+    }
+    block.window_state = windowState;
 }
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS

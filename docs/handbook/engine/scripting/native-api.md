@@ -21,22 +21,25 @@ kind: header
 | [`conjure_chunk_view`](native-api/conjure-chunk-view.md) | Columns of one chunk inside a DOD query scope, valid until <code>query_end</code>. |
 | [`conjure_collision_record`](native-api/conjure-collision-record.md) |  |
 | [`conjure_create_request`](native-api/conjure-create-request.md) | One instance to create; filled by native, <code>out_slot</code> written by managed. |
-| [`conjure_frame_block`](native-api/conjure-frame-block.md) | Written once per frame by the engine before <code>FRAME_BEGIN</code> and read directly by Time and Input in <code>C</code>#. |
-| [`conjure_frame_stats_block`](native-api/conjure-frame-stats-block.md) |  |
+| [`conjure_frame_block`](native-api/conjure-frame-block.md) | Written once per frame by the engine before <code>FRAME_BEGIN</code> and read directly by Time, Input and Screen in <code>C</code>#. The screen fields are <code>engine::game_screen_of(window)</code> (conjure/engine/<code><a href="../engine/game-screen/game-screen.html">game_screen</a>.h</code>): the framebuffer in pixels (0 x 0 while minimised or without a window), the framebuffer / logical ratio, the OS UI scale of the window&#x27;s monitor, and <code>window_state</code>, a set of the <code>FRAME_WINDOW_</code>* bits of <code>conjure::scripting</code>. |
+| [`conjure_frame_stats_block`](native-api/conjure-frame-stats-block.md) | The last committed <code><a href="../engine/frame-stats/frame-sample.html">engine::frame_sample</a></code>. The <code>managed_</code>* fields are its managed-heap figures (the main thread&#x27;s allocations, the heap size and the collections of that frame), 0 in a frame without a ready script host. |
 | [`conjure_gamepad_state`](native-api/conjure-gamepad-state.md) |  |
 | [`conjure_input_block`](native-api/conjure-input-block.md) |  |
-| [`conjure_managed_api`](native-api/conjure-managed-api.md) | Functions managed provides to native, filled by <code>Conjure.Interop.NativeBridge.Initialize</code>. |
+| [`conjure_managed_api`](native-api/conjure-managed-api.md) | Functions managed provides to native, filled by <code>Conjure.Interop.NativeBridge.Initialize</code>. <code>sample_memory</code> fills a <code><a href="native-api/conjure-managed-memory.html">conjure_managed_memory</a></code> and returns 0 (a negative status when it cannot). <code>set_active(slots, count, active)</code> tells the instances in <code>slots</code> that their entity became active (1) or inactive (0) and returns how many of them changed state; a free slot is skipped. Not yet carried out end to end: <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> never calls <code>set_active</code>, and <code>Conjure.Managed</code> accepts the call and returns 0 without tracking activity; the <code>null</code> host tracks it for tests. |
 | [`conjure_managed_component_desc`](native-api/conjure-managed-component-desc.md) | An [EcsComponent] struct: <code>schema_json</code> lists {&quot;fields&quot;:[{&quot;name&quot;,&quot;type&quot;,&quot;offset&quot;}]} with <code>core::reflect</code> type names. |
+| [`conjure_managed_memory`](native-api/conjure-managed-memory.md) | What <code>conjure_managed_api::sample_memory</code> reports: <code>thread_allocated_bytes</code> is <code>GC.GetAllocatedBytesForCurrentThread()</code> on the calling (main) thread, <code>heap_bytes</code> <code>GC.GetTotalMemory(false)</code>, and the collections <code>GC.CollectionCount(0)</code> and <code>GC.CollectionCount(2)</code>. Everything but <code>heap_bytes</code> is cumulative over the life of the managed runtime. |
 | [`conjure_mat4`](native-api/conjure-mat4.md) | Column-major 4x4 matrix. |
 | [`conjure_module_record`](native-api/conjure-module-record.md) |  |
 | [`conjure_native_api`](native-api/conjure-native-api.md) | Functions native provides to managed. Every entry defaults to <code>nullptr</code>; the handshake validates the header, and managed throws NotSupportedException for an entry nobody filled. |
 | [`conjure_quat_xyzw`](native-api/conjure-quat-xyzw.md) | <code>A</code> quaternion in explicit x, y, z, w storage order (converted from <code><a href="../core/math/glm-types.html#symbol-quat">math::quat</a></code> by name, /). |
 | [`conjure_query_scope`](native-api/conjure-query-scope.md) |  |
-| [`conjure_ray_query`](native-api/conjure-ray-query.md) |  |
-| [`conjure_raycast_hit`](native-api/conjure-raycast-hit.md) |  |
+| [`conjure_ray_query`](native-api/conjure-ray-query.md) | <code>A</code> ray query; flags is a set of <code><a href="native-api.html#symbol-conjure-query-flags">conjure_query_flags</a></code>, and a bit outside it is refused with <code>INVALID_ARGUMENT</code>. |
+| [`conjure_raycast_hit`](native-api/conjure-raycast-hit.md) | One query hit; <code>is_trigger</code> is 1 when the body hit is a trigger volume (hit only with <code>INCLUDE_TRIGGERS</code>). |
 | [`conjure_script_class_desc`](native-api/conjure-script-class-desc.md) |  |
 | [`conjure_script_field_desc`](native-api/conjure-script-field-desc.md) | One serialised field of a script class. <code>meta_json</code> is {&quot;tooltip&quot;,&quot;min&quot;,&quot;max&quot;,&quot;enumNames&quot;,&quot;enumValues&quot;, &quot;enumFlags&quot;,&quot;assetType&quot;,&quot;hidden&quot;}, each key present only when it applies: enumValues runs parallel to enumNames with the int32 the <code>ENUM</code> payload carries for each name, enumFlags is <code>true</code> for a [Flags] enum, and assetType is the registered asset type name of the AssetRef tag (&quot;<code>conjure.audio.clip</code>&quot;), absent for an untyped reference. <code>default_json</code> is the canonical JSON of the default value. |
 | [`conjure_shape_query`](native-api/conjure-shape-query.md) |  |
+| [`conjure_spawn_component`](native-api/conjure-spawn-component.md) | One component of an <code>entity_spawn</code> request: <code><a href="../core/reflect/type-id/reflect-type-id.html">type_id</a></code> is the id <code>component_lookup_type</code> or <code>component_register_managed</code> returned, stride the bytes between two entities&#x27; values (0: <code>data</code> is one value for every entity) and data the values (<code>nullptr</code>: the registered default value). |
+| [`conjure_spawn_desc`](native-api/conjure-spawn-desc.md) | An <code>entity_spawn</code> request: <code>count</code> entities (1..65536) holding the <code>component_count</code> components (0..8) each. parent is read with <code>SCENE_ENTITIES</code> only (0: scene roots); flags is a set of <code><a href="native-api.html#symbol-conjure-spawn-flags">conjure_spawn_flags</a></code>. |
 | [`conjure_transform`](native-api/conjure-transform.md) |  |
 | [`conjure_uuid`](native-api/conjure-uuid.md) |  |
 | [`conjure_vec2`](native-api/conjure-vec2.md) |  |
@@ -112,6 +115,29 @@ enum class conjure_force_mode : uint8_t {
 };
 ```
 
+### `conjure_query_flags` {#symbol-conjure-query-flags}
+
+```cpp
+enum class conjure_query_flags : uint32_t {
+    NONE = 0,
+    INCLUDE_TRIGGERS = 1 << 0,
+    EXCLUDE_STATIC = 1 << 1
+};
+```
+
+<code>conjure_ray_query::flags</code> and the flags of the overlap entries, as bits: <code>NONE</code> (0) skips trigger volumes and hits static bodies; <code>INCLUDE_TRIGGERS</code> (1) also hits trigger volumes, <code>EXCLUDE_STATIC</code> (2) skips static bodies. The values are ABI, pinned by the <code>static_asserts</code> of the layout pins below; a new bit is appended with an explicit value of its own.
+
+### `conjure_spawn_flags` {#symbol-conjure-spawn-flags}
+
+```cpp
+enum class conjure_spawn_flags : uint32_t {
+    NONE = 0,
+    SCENE_ENTITIES = 1 << 0
+};
+```
+
+<code>conjure_spawn_desc::flags</code>, as bits: <code>NONE</code> (0) makes bare entities, as <code>entity_create</code> does; <code>SCENE_ENTITIES</code> (1) makes scene entities under <code>conjure_spawn_desc::parent</code>, as <code>entity_create_many</code> does. The values are ABI, pinned by the <code>static_asserts</code> of the layout pins below; a new bit is appended with an explicit value of its own.
+
 ### `script_callback` {#symbol-script-callback}
 
 ```cpp
@@ -177,9 +203,21 @@ The three callback phases <code>run_phase</code> takes.
 |---|---|---|---|
 | <a id="variable-CREATE_FLAG_ALREADY_CREATED"></a><code>CREATE_FLAG_ALREADY_CREATED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">2</span></code> | <code>conjure_create_request::flags</code> bit: the entry&#x27;s OnCreate already returned in this entity&#x27;s lifetime, so the recreated instance runs OnReload instead of OnCreate, after its fields were applied (hot reload, and a snapshot restore or set replace from JSON whose entry says &quot;created&quot;). |
 | <a id="variable-CREATE_FLAG_ALREADY_STARTED"></a><code>CREATE_FLAG_ALREADY_STARTED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">1</span></code> | <code>conjure_create_request::flags</code> bit: the entry already ran OnStart (reload, snapshot restore). |
+| <a id="variable-CREATE_FLAG_INACTIVE"></a><code>CREATE_FLAG_INACTIVE</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">4</span></code> | <code>conjure_create_request::flags</code> bit: the entity is inactive (it or an ancestor is disabled) when the instance is created, so the instance starts inactive; <code>conjure_managed_api::set_active</code> reports later changes. Only the <code>null</code> host honours it so far: <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> never sets it, and <code>Conjure.Managed</code> ignores it. |
+| <a id="variable-FRAME_WINDOW_FOCUSED"></a><code>FRAME_WINDOW_FOCUSED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">1</span></code> | <code>conjure_frame_block::window_state</code> bit: the window has the input focus. |
+| <a id="variable-FRAME_WINDOW_FULLSCREEN"></a><code>FRAME_WINDOW_FULLSCREEN</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">4</span></code> | <code>conjure_frame_block::window_state</code> bit: the window is (borderless) fullscreen. |
+| <a id="variable-FRAME_WINDOW_MINIMISED"></a><code>FRAME_WINDOW_MINIMISED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">2</span></code> | <code>conjure_frame_block::window_state</code> bit: the window is minimised (the screen is then 0 x 0). |
 | <a id="variable-NATIVE_API_CORE_ENTRY_COUNT"></a><code>NATIVE_API_CORE_ENTRY_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="na">CONJURE_<wbr>NATIVE_<wbr>API_<wbr>CORE_<wbr>ENTRY_<wbr>COUNT</span></code> | Entries this module implements (everything before the bindings marker in <code>native_api.inl</code>). |
 | <a id="variable-NATIVE_API_ENTRY_COUNT"></a><code>NATIVE_API_ENTRY_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="na">CONJURE_<wbr>NATIVE_<wbr>API_<wbr>ENTRY_<wbr>COUNT</span></code> | Entries in the table, core and bindings together. |
-| <a id="variable-QUERY_MAX_COMPONENTS"></a><code>QUERY_MAX_COMPONENTS</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> int32_t</code> | <code class="signature"><span class="mi">8</span></code> | Column slots of a <code><a href="native-api/conjure-chunk-view.html">conjure_chunk_view</a></code>. |
+| <a id="variable-QUERY_MAX_COMPONENTS"></a><code>QUERY_MAX_COMPONENTS</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> int32_t</code> | <code class="signature"><span class="mi">8</span></code> | Column slots of a <code><a href="native-api/conjure-chunk-view.html">conjure_chunk_view</a></code>, and the most component ids a <code>query_begin</code> exclusion list holds. |
+
+## Macros
+
+### `CONJURE_ENUM_FLAGS` {#symbol-conjure-enum-flags}
+
+```cpp
+CONJURE_ENUM_FLAGS(conjure_query_flags)
+```
 
 ## Functions
 

@@ -187,6 +187,7 @@ namespace {
                 mHit.distance = result.mFraction * mDistance;
                 mHit.penetrationDepth = result.mPenetrationDepth;
                 mHit.layer = jolt::physics_layer_of(mBody->GetObjectLayer());
+                mHit.isTrigger = mBody->IsSensor();
             }
     };
 

@@ -29,7 +29,7 @@ TEST_SUITE("scripting/native_api") {
         CHECK(offsetof(conjure_native_api, frame) == 16);
         CHECK(offsetof(conjure_native_api, log_write) == 24);
         CHECK(sizeof(conjure_native_api) == 24 + NATIVE_API_ENTRY_COUNT * sizeof(void *));
-        CHECK(sizeof(conjure_managed_api) == 16 + 10 * sizeof(void *));
+        CHECK(sizeof(conjure_managed_api) == 16 + 12 * sizeof(void *));
     }
 
     TEST_CASE("native_entry_descriptors - entry count matches the table and the manifest") {
@@ -67,18 +67,28 @@ TEST_SUITE("scripting/native_api") {
         }
     }
 
-    TEST_CASE("native_entry_descriptors - entity_get_tag_text is appended last with the string-out signature") {
-        // Appended rather than placed beside entity_get_tag: entries are never reordered within a version, so
-        // every index before it keeps its value and only the layout hash changes.
+    TEST_CASE("native_entry_descriptors - the version 3 entries follow entity_get_tag_text") {
+        // Entries are appended, never reordered: entity_get_tag_text (version 2) keeps its index after
+        // modules_name, and entity_spawn and the camera group (version 3) follow it, camera_world_to_screen last.
         const std::span<const native_entry_descriptor> entries = native_entry_descriptors();
         REQUIRE(entries.size() == NATIVE_API_ENTRY_COUNT);
+        const usize tagText = NATIVE_API_ENTRY_COUNT - 6;
+        CHECK(tagText == 126);
+        CHECK(entries[tagText].group == "entity");
+        CHECK(entries[tagText].name == "get_tag_text");
+        CHECK(entries[tagText].signature == "int32_t (uint64_t entity, char *utf8, int32_t capacity)");
+        const usize getName = static_cast<usize>(find_native_entry("entity_get_name"));
+        CHECK(entries[tagText].signature == entries[getName].signature);
+        CHECK(offsetof(conjure_native_api, entity_get_tag_text) == 24 + tagText * sizeof(void *));
+        CHECK(find_native_entry("modules_name") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 7);
+        CHECK(entries[tagText + 1].group == "entity");
+        CHECK(entries[tagText + 1].name == "spawn");
         const native_entry_descriptor &last = entries[NATIVE_API_ENTRY_COUNT - 1];
-        CHECK(last.group == "entity");
-        CHECK(last.name == "get_tag_text");
-        CHECK(last.signature == "int32_t (uint64_t entity, char *utf8, int32_t capacity)");
-        CHECK(last.signature == entries[static_cast<usize>(find_native_entry("entity_get_name"))].signature);
-        CHECK(offsetof(conjure_native_api, entity_get_tag_text) == 24 + (NATIVE_API_ENTRY_COUNT - 1) * sizeof(void *));
-        CHECK(find_native_entry("modules_name") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 2);
+        CHECK(last.group == "camera");
+        CHECK(last.name == "world_to_screen");
+        CHECK(
+          offsetof(conjure_native_api, camera_world_to_screen) == 24 + (NATIVE_API_ENTRY_COUNT - 1) * sizeof(void *)
+        );
     }
 
     TEST_CASE("make_native_api - all entries are null before fill and the header is set") {
@@ -158,7 +168,8 @@ TEST_SUITE("scripting/native_api") {
         CHECK(find_native_entry("log_write") == 0);
         CHECK(find_native_entry("query_end") == static_cast<i32>(NATIVE_API_CORE_ENTRY_COUNT) - 1);
         CHECK(find_native_entry("transform_get_local") == static_cast<i32>(NATIVE_API_CORE_ENTRY_COUNT));
-        CHECK(find_native_entry("entity_get_tag_text") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 1);
+        CHECK(find_native_entry("entity_get_tag_text") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 6);
+        CHECK(find_native_entry("camera_world_to_screen") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 1);
         CHECK(find_native_entry("physics_raycast") > 0);
         CHECK(find_native_entry("no_such_entry") == -1);
         CHECK(find_native_entry("") == -1);
@@ -209,12 +220,27 @@ TEST_SUITE("scripting/native_api") {
     TEST_CASE("conjure_create_request - the create flags are distinct single bits") {
         CHECK(CREATE_FLAG_ALREADY_STARTED == 1);
         CHECK(CREATE_FLAG_ALREADY_CREATED == 2);
+        CHECK(CREATE_FLAG_INACTIVE == 4);
         CHECK((CREATE_FLAG_ALREADY_STARTED & CREATE_FLAG_ALREADY_CREATED) == 0);
+        CHECK((CREATE_FLAG_INACTIVE & (CREATE_FLAG_ALREADY_STARTED | CREATE_FLAG_ALREADY_CREATED)) == 0);
+    }
+
+    TEST_CASE("regression - code sweep W3-CS-L1 the query and spawn flags are flag sets with pinned bits") {
+        CHECK(static_cast<u32>(conjure_query_flags::NONE) == 0);
+        CHECK(static_cast<u32>(conjure_query_flags::INCLUDE_TRIGGERS) == 1);
+        CHECK(static_cast<u32>(conjure_query_flags::EXCLUDE_STATIC) == 2);
+        const conjure_query_flags both = conjure_query_flags::INCLUDE_TRIGGERS | conjure_query_flags::EXCLUDE_STATIC;
+        CHECK(static_cast<u32>(both) == 3);
+        CHECK(has_flag(both, conjure_query_flags::EXCLUDE_STATIC));
+        CHECK_FALSE(has_any_flag(both, ~both));
+        CHECK(static_cast<u32>(conjure_spawn_flags::NONE) == 0);
+        CHECK(static_cast<u32>(conjure_spawn_flags::SCENE_ENTITIES) == 1);
+        CHECK((conjure_spawn_flags::SCENE_ENTITIES & conjure_spawn_flags::NONE) == conjure_spawn_flags::NONE);
     }
 
     TEST_CASE("conjure_frame_block - is 64-byte aligned with the documented offsets") {
         CHECK(alignof(conjure_frame_block) == 64);
-        CHECK(sizeof(conjure_frame_block) == 448);
+        CHECK(sizeof(conjure_frame_block) == 512);
         CHECK(offsetof(conjure_frame_block, delta_time) == 16);
         CHECK(offsetof(conjure_frame_block, frame_index) == 32);
         CHECK(offsetof(conjure_frame_block, current_phase) == 44);
@@ -222,16 +248,22 @@ TEST_SUITE("scripting/native_api") {
         CHECK(sizeof(conjure_input_block) == 392);
         CHECK(offsetof(conjure_input_block, mouse_x) == 192);
         CHECK(offsetof(conjure_input_block, gamepads) == 228);
+        CHECK(offsetof(conjure_frame_block, screen_width) == 440);
+        CHECK(offsetof(conjure_frame_block, ui_scale) == 456);
+        CHECK(offsetof(conjure_frame_block, window_state) == 460);
     }
 
     TEST_CASE("ABI records - sizes match 15_bindings.md 2.4") {
         CHECK(sizeof(conjure_uuid) == 16);
-        CHECK(sizeof(conjure_ray_query) == 40);
-        CHECK(sizeof(conjure_shape_query) == 80);
-        CHECK(sizeof(conjure_raycast_hit) == 40);
+        CHECK(sizeof(conjure_ray_query) == 48);
+        CHECK(sizeof(conjure_shape_query) == 88);
+        CHECK(sizeof(conjure_raycast_hit) == 48);
         CHECK(sizeof(conjure_asset_info) == 16);
         CHECK(sizeof(conjure_module_record) == 20);
-        CHECK(sizeof(conjure_frame_stats_block) == 64);
+        CHECK(sizeof(conjure_frame_stats_block) == 88);
+        CHECK(sizeof(conjure_spawn_component) == 16);
+        CHECK(sizeof(conjure_spawn_desc) == 32);
+        CHECK(sizeof(conjure_managed_memory) == 24);
         CHECK(sizeof(conjure_create_request) == 40);
         CHECK(sizeof(conjure_collision_record) == 48);
         CHECK(sizeof(conjure_chunk_view) == 80);

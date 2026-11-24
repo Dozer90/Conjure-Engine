@@ -29,7 +29,8 @@
 // and a null context pointer. With scripting.enabled == false nothing is constructed and one INFO line says so;
 // when it is the headless default that holds back a project with a game assembly, the line names --scripting
 // (D12).
-// Every frame (step 5) the subsystem writes the conjure_frame_block from engine_time and the input snapshot.
+// Every frame (step 5) the subsystem writes the conjure_frame_block from engine_time, the input snapshot and the
+// game screen of the window (game_screen_of).
 // Before a scene unloads it runs destroy_all(true) so OnDestroy sees live entities (R29); physics contact
 // events become collision events for scripting.collision_dispatch.
 
@@ -84,12 +85,15 @@ namespace conjure::engine {
             ) noexcept;
 
             /// <summary>
-            /// Copies engine_time and an input snapshot into the managed frame block (the body of begin_frame).
+            /// Copies engine_time, an input snapshot and game_screen_of(window) into the managed frame block (the
+            /// body of begin_frame, which runs after the platform pump, so a resize shows in the same frame). A
+            /// null window writes the screen of no window: 0 x 0 pixels, scales 1 and no window_state bit.
             /// </summary>
             static void write_frame_block(
               conjure_frame_block &block,
               const engine_time &time,
-              const platform::input_state &input
+              const platform::input_state &input,
+              const platform::window *window
             ) noexcept;
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS

@@ -16,8 +16,8 @@
 // The bindings-owned entries of the native table (docs/design/15_bindings.md 2.3, 3.1, B2, B3).
 //
 // Filtered X-macro (B2): CONJURE_BINDINGS_FOR_EACH_ENTRY(X) expands X(group, name, ret, (args)) for the
-// entries of the ten bindings groups (transform, the hierarchy half of entity, scene, prefab, physics,
-// audio, input, asset, diagnostics, modules; R26/R64) and nothing for the core entries of scripting. It is
+// entries of the eleven bindings groups (transform, the hierarchy half of entity, scene, prefab, physics,
+// audio, input, asset, diagnostics, modules, camera; R26/R64) and nothing for the core entries of scripting. It is
 // the generated CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY of native_api_hash.h, which the generator cuts
 // at the `// --- bindings (R26) ---` marker of native_api.inl, so a line added there without an
 // implementation here is a link error, never a null slot.
@@ -37,7 +37,7 @@
 #define CONJURE_BINDINGS_FOR_EACH_ENTRY(X) CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY(X)
 
 /// <summary>
-/// 1 for the ten bindings groups, 0 for the core groups (the entity group counts as owned: its five core
+/// 1 for the eleven bindings groups, 0 for the core groups (the entity group counts as owned: its five core
 /// entries sit before the marker and are therefore absent from CONJURE_BINDINGS_FOR_EACH_ENTRY).
 /// </summary>
 #define CONJURE_BINDINGS_OWNS_GROUP(group) CONJURE_BINDINGS_OWNS_GROUP_##group
@@ -55,10 +55,11 @@
 #define CONJURE_BINDINGS_OWNS_GROUP_asset 1
 #define CONJURE_BINDINGS_OWNS_GROUP_diagnostics 1
 #define CONJURE_BINDINGS_OWNS_GROUP_modules 1
+#define CONJURE_BINDINGS_OWNS_GROUP_camera 1
 
 /// <summary>
-/// 1 when the module behind a group is part of this build; the physics and audio groups follow their
-/// CONJURE_WITH_* options, every other group is always compiled in.
+/// 1 when the module behind a group is part of this build; the physics, audio and camera groups follow
+/// CONJURE_WITH_PHYSICS, _AUDIO and _RENDERER, every other group is always compiled in.
 /// </summary>
 #define CONJURE_BINDINGS_GROUP_COMPILED(group) CONJURE_BINDINGS_GROUP_COMPILED_##group
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
@@ -70,6 +71,11 @@
     #define CONJURE_BINDINGS_GROUP_COMPILED_audio 1
 #else
     #define CONJURE_BINDINGS_GROUP_COMPILED_audio 0
+#endif
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    #define CONJURE_BINDINGS_GROUP_COMPILED_camera 1
+#else
+    #define CONJURE_BINDINGS_GROUP_COMPILED_camera 0
 #endif
 #define CONJURE_BINDINGS_GROUP_COMPILED_transform 1
 #define CONJURE_BINDINGS_GROUP_COMPILED_entity 1
@@ -148,7 +154,7 @@ namespace conjure::bindings {
     /// <summary>
     /// Number of groups the bindings own (R64).
     /// </summary>
-    inline constexpr u32 BINDINGS_GROUP_COUNT = 10;
+    inline constexpr u32 BINDINGS_GROUP_COUNT = 11;
 
     /// <summary>
     /// The real implementations, one per owned entry, with the exact ABI signature of native_api.inl.

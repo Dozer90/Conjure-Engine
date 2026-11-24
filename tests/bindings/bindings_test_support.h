@@ -5,7 +5,8 @@
 // four systems, the null window and an input accumulator, the engine's check registry and frame stats, a
 // script_runtime over the null host and (on request) a physics world and a null-backend audio engine into a
 // binding_context, fills a native table from it and wraps the slots with counting thunks; headless_app wraps
-// engine::application with the bindings subsystem added. Everything is headless and deterministic.
+// engine::application with the bindings subsystem added; managed_app is that application over the real CLR with
+// Conjure.TestScripts.dll loaded, for the [dotnet] cases. Everything is headless and deterministic.
 
 #include "conjure/testing/doctest.h"
 
@@ -19,6 +20,7 @@
 #include "conjure/bindings/call_counters.h"
 #include "conjure/bindings/native_api_entries.h"
 #include "conjure/core/jobs/job_system.h"
+#include "conjure/core/json/document.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/types.h"
 #include "conjure/core/uuid.h"
@@ -263,4 +265,79 @@ namespace bindings_test {
     /// docs/generated/native_api_manifest.json.
     /// </summary>
     [[nodiscard]] std::filesystem::path manifest_path();
+
+    /*===========================================================================*/
+    /*===========================================================================*/
+    // managed_app
+
+    /// <summary>
+    /// A headless application (headless_config with the managed SDK and Conjure.TestScripts.dll) over the real
+    /// CLR, shut down on destruction; scripts are attached by class name and read back through their collected
+    /// fields. The constructor REQUIREs a running scripting subsystem with the game assembly loaded, so a case
+    /// that builds one first checks precondition::DOTNET_RUNTIME.
+    /// </summary>
+    class managed_app {
+        public:
+            managed_app();
+            ~managed_app();
+
+            managed_app(const managed_app &) = delete;
+            managed_app &operator=(const managed_app &) = delete;
+
+            [[nodiscard]] conjure::engine::application &app() noexcept {
+                return *mApp;
+            }
+
+            [[nodiscard]] conjure::scripting::script_runtime &runtime() noexcept;
+
+            /// <summary>
+            /// A new entity named 'name' in the active scene.
+            /// </summary>
+            [[nodiscard]] conjure::ecs::entity create(std::string_view name);
+
+            /// <summary>
+            /// Adds the script class 'className' (full name) to 'entity' with the fields of 'fieldsJson' (a JSON
+            /// object), then runs 'frames' engine frames so its callbacks execute.
+            /// </summary>
+            [[nodiscard]] conjure::scripting::script_entry_id attach(
+              conjure::ecs::entity entity,
+              std::string_view className,
+              conjure::u32 frames = 2,
+              std::string_view fieldsJson = "{}"
+            );
+
+            /// <summary>
+            /// Runs 'frames' engine frames (REQUIREs each to succeed).
+            /// </summary>
+            void step(conjure::u32 frames);
+
+            /// <summary>
+            /// The script's collected fields (REQUIREs the collection to succeed).
+            /// </summary>
+            [[nodiscard]] conjure::core::json::document fields_of(conjure::scripting::script_entry_id id);
+
+            /// <summary>
+            /// The script's collected field 'name' as an integer; -1 when it is absent or not a number.
+            /// </summary>
+            [[nodiscard]] conjure::i64 field_i64(conjure::scripting::script_entry_id id, std::string_view name);
+
+            /// <summary>
+            /// The script's collected field 'name' as a double; -1 when it is absent or not a number.
+            /// </summary>
+            [[nodiscard]] conjure::f64 field_f64(conjure::scripting::script_entry_id id, std::string_view name);
+
+            /// <summary>
+            /// The script's collected field 'name' as a string; empty when it is absent or not a string.
+            /// </summary>
+            [[nodiscard]] std::string field_string(conjure::scripting::script_entry_id id, std::string_view name);
+
+            /// <summary>
+            /// Shuts the application down now (a case that checks the shutdown logs); the destructor does it
+            /// otherwise. A second call does nothing.
+            /// </summary>
+            void shutdown();
+
+        private:
+            std::unique_ptr<conjure::engine::application> mApp = nullptr;
+    };
 }

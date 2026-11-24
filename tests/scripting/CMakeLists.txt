@@ -42,10 +42,13 @@ conjure_add_test_module(scripting
         test_hot_reload.cpp
         test_log_category.cpp
         test_managed_build.cpp
+        test_managed_table.cpp
         test_native_api.cpp
         test_native_api_hash.cpp
         test_native_entries.cpp
         test_null_script_host.cpp
+        test_script_activity.cpp
+        test_script_activity_managed.cpp
         test_script_class_registry.cpp
         test_script_collisions.cpp
         test_script_component.cpp

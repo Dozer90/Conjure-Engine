@@ -47,6 +47,7 @@ class CONJURE_API null_host_recorder
 <table class="variable-table">
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td>private</td><td><code class="signature">mActivities</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="null-host-recorder-activity-record.html">activity_<wbr>record</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mApplies</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="null-host-recorder-apply-record.html">apply_<wbr>record</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">MAX_RECORDS</code></td><td><code class="signature"><span class="k">static</span> <span class="k">constexpr</span> <a href="../../core/types.html#symbol-usize">usize</a></code></td><td><code class="signature"><span class="mi">65536</span></code></td><td>Entries each list keeps; later records are dropped and counted.</td></tr>
 <tr><td>private</td><td><code class="signature">mCalls</code></td><td><code class="signature">std::vector&lt;std::string&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
@@ -59,6 +60,7 @@ class CONJURE_API null_host_recorder
 <tr><td>private</td><td><code class="signature">mEnabled</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">true</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Loaded<wbr>Assemblies</code></td><td><code class="signature">std::vector&lt;std::string&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mPhases</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="null-host-recorder-phase-record.html">phase_<wbr>record</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Sample<wbr>Memory<wbr>Count</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Shutdown<wbr>Count</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u32">u32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mUnloadCount</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u32">u32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 </tbody>
@@ -67,6 +69,12 @@ class CONJURE_API null_host_recorder
 ## Functions
 
 ### Public
+
+#### `activities` {#function-activities}
+
+<div class="function-declaration" id="function-activities-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">const</span> std::vector&lt;<a href="null-host-recorder-activity-record.html">activity_record</a>&gt; &amp;activities() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>Every slot of every <code>set_active</code> call, in call order.</p>
 
 #### `applies` {#function-applies}
 
@@ -133,6 +141,11 @@ class CONJURE_API null_host_recorder
 
 <div class="function-declaration" id="function-phases-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">const</span> std::vector&lt;<a href="null-host-recorder-phase-record.html">phase_record</a>&gt; &amp;phases() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
+#### `record_activity` {#function-record-activity}
+
+<div class="function-declaration" id="function-record-activity-1"><pre><code><span class="k">void</span> record_activity(
+    <span class="k">const</span> <a href="null-host-recorder-activity-record.html">activity_record</a> &amp;record);</code></pre></div>
+
 #### `record_apply` {#function-record-apply}
 
 <div class="function-declaration" id="function-record-apply-1"><pre><code><span class="k">void</span> record_apply(
@@ -176,6 +189,10 @@ class CONJURE_API null_host_recorder
 <div class="function-declaration" id="function-record-phase-1"><pre><code><span class="k">void</span> record_phase(
     <span class="k">const</span> <a href="null-host-recorder-phase-record.html">phase_record</a> &amp;record);</code></pre></div>
 
+#### `record_sample_memory` {#function-record-sample-memory}
+
+<div class="function-declaration" id="function-record-sample-memory-1"><pre><code><span class="k">void</span> record_sample_memory();</code></pre></div>
+
 #### `record_shutdown` {#function-record-shutdown}
 
 <div class="function-declaration" id="function-record-shutdown-1"><pre><code><span class="k">void</span> record_shutdown();</code></pre></div>
@@ -183,6 +200,12 @@ class CONJURE_API null_host_recorder
 #### `record_unload` {#function-record-unload}
 
 <div class="function-declaration" id="function-record-unload-1"><pre><code><span class="k">void</span> record_unload();</code></pre></div>
+
+#### `sample_memory_count` {#function-sample-memory-count}
+
+<div class="function-declaration" id="function-sample-memory-count-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/types.html#symbol-u64">u64</a> sample_memory_count() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p><code>sample_memory</code> calls. The engine samples once per frame, so these calls are counted here only and never appear in <code><a href="#function-calls-1">calls</a>()</code>.</p>
 
 #### `set_enabled` {#function-set-enabled}
 

@@ -33,8 +33,10 @@ struct conjure_raycast_hit
 <tbody>
 <tr><td>public</td><td><code class="signature">distance</code></td><td><code class="signature"><span class="k">float</span></code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">entity</code></td><td><code class="signature">uint64_t</code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">is_trigger</code></td><td><code class="signature">uint8_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">layer</code></td><td><code class="signature">int32_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">normal</code></td><td><code class="signature"><a href="conjure-vec3.html">conjure_vec3</a></code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">pad</code></td><td><code class="signature">uint8_t[<span class="na">7</span>]</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">point</code></td><td><code class="signature"><a href="conjure-vec3.html">conjure_vec3</a></code></td><td>—</td><td></td></tr>
 </tbody>
 </table>

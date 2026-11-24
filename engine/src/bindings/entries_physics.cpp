@@ -1,5 +1,6 @@
 #include "bindings/entry_support.h"
 
+#include "conjure/core/enum_flags.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/math/ray.h"
 #include "conjure/core/math/transform.h"
@@ -20,8 +21,9 @@
 #include <vector>
 
 // physics_* (docs/design/15_bindings.md 2.3, 14_physics.md 8, R49): queries and the entity-keyed body API
-// of physics_world. Velocities are read from the rigid_body mirror (the pull writes them), force modes map
-// onto add_force / add_impulse with the component's mass, characters go through character_move /
+// of physics_world. Every query takes conjure_query_flags (triggers skipped and static bodies hit unless a flag
+// says otherwise) and an entity to ignore. Velocities are read from the rigid_body mirror (the pull writes them),
+// force modes map onto add_force / add_impulse with the component's mass, characters go through character_move /
 // character_ground. This file is built only with CONJURE_WITH_PHYSICS; the stubs cover the group otherwise.
 
 using namespace conjure;
@@ -57,19 +59,46 @@ namespace {
         return sHits;
     }
 
-    [[nodiscard]] physics::query_filter filter_of(uint32_t layerMask, uint64_t ignore) noexcept {
-        physics::query_filter filter = {};
-        filter.layers = physics::physics_layer_mask{layerMask};
-        filter.ignore = marshal::to_entity(ignore);
-        return filter;
+    /// <summary>
+    /// Every conjure_query_flags bit; a bit outside it is refused.
+    /// </summary>
+    constexpr conjure_query_flags KNOWN_QUERY_FLAGS =
+      conjure_query_flags::INCLUDE_TRIGGERS | conjure_query_flags::EXCLUDE_STATIC;
+
+    /// <summary>
+    /// The physics filter of a query: its layers, the entity to ignore and the conjure_query_flags (triggers
+    /// only with INCLUDE_TRIGGERS, static bodies unless EXCLUDE_STATIC). False with INVALID_ARGUMENT "flags" in
+    /// 'status' for an unknown bit.
+    /// </summary>
+    [[nodiscard]] bool filter_of(
+      native_function_id id,
+      uint32_t layerMask,
+      uint64_t ignore,
+      uint32_t flags,
+      physics::query_filter &out,
+      int32_t &status
+    ) noexcept {
+        const conjure_query_flags bits = static_cast<conjure_query_flags>(flags);
+        if (has_any_flag(bits, ~KNOWN_QUERY_FLAGS)) {
+            status = fail_entry(id, bindings_error::INVALID_ARGUMENT, "flags");
+            return false;
+        }
+        out = {};
+        out.layers = physics::physics_layer_mask{layerMask};
+        out.ignore = marshal::to_entity(ignore);
+        out.includeTriggers = has_flag(bits, conjure_query_flags::INCLUDE_TRIGGERS);
+        out.includeStatic = !has_flag(bits, conjure_query_flags::EXCLUDE_STATIC);
+        return true;
     }
 
     void write_hit(const physics::raycast_hit &hit, conjure_raycast_hit &out) noexcept {
+        out = {};
         out.entity = marshal::from_entity(hit.entity);
         out.point = marshal::from_vec3(hit.point);
         out.normal = marshal::from_vec3(hit.normal);
         out.distance = hit.distance;
         out.layer = static_cast<int32_t>(hit.layer);
+        out.is_trigger = hit.isTrigger ? 1 : 0;
     }
 
     [[nodiscard]] bool unit_direction(
@@ -195,8 +224,11 @@ int32_t conjure::bindings::entries::physics_raycast(const conjure_ray_query *que
     if (!valid_distance(ID, query->max_distance, status)) {
         return status;
     }
-    const std::optional<physics::raycast_hit> hit =
-      world()->raycast(ray, query->max_distance, filter_of(query->layer_mask, query->ignore_entity));
+    physics::query_filter filter = {};
+    if (!filter_of(ID, query->layer_mask, query->ignore_entity, query->flags, filter, status)) {
+        return status;
+    }
+    const std::optional<physics::raycast_hit> hit = world()->raycast(ray, query->max_distance, filter);
     if (!hit.has_value()) {
         return 0;
     }
@@ -229,9 +261,12 @@ int32_t conjure::bindings::entries::physics_raycast_all(
     if (!valid_distance(ID, query->max_distance, status)) {
         return status;
     }
+    physics::query_filter filter = {};
+    if (!filter_of(ID, query->layer_mask, query->ignore_entity, query->flags, filter, status)) {
+        return status;
+    }
     std::vector<physics::raycast_hit> &hits = hit_scratch(capacity);
-    const u32 count =
-      world()->raycast_all(ray, query->max_distance, hits, filter_of(query->layer_mask, query->ignore_entity));
+    const u32 count = world()->raycast_all(ray, query->max_distance, hits, filter);
     const usize written = outHits == nullptr ? 0 : std::min<usize>(count, static_cast<usize>(capacity));
     for (usize index = 0; index < written; ++index) {
         write_hit(hits[index], outHits[index]);
@@ -259,6 +294,10 @@ int32_t conjure::bindings::entries::physics_shape_cast(const conjure_shape_query
     if (!valid_distance(ID, query->ray.max_distance, status)) {
         return status;
     }
+    physics::query_filter filter = {};
+    if (!filter_of(ID, query->ray.layer_mask, query->ray.ignore_entity, query->ray.flags, filter, status)) {
+        return status;
+    }
     physics::cast_shape_desc shape = physics::sphere_shape_desc{query->radius};
     switch (static_cast<conjure_cast_shape>(query->shape)) {
         case conjure_cast_shape::SPHERE:
@@ -273,21 +312,18 @@ int32_t conjure::bindings::entries::physics_shape_cast(const conjure_shape_query
     math::transform start = {};
     start.position = marshal::to_vec3(query->ray.origin);
     start.rotation = marshal::to_quat(query->rotation);
-    const std::optional<physics::shape_cast_hit> hit = world()->shape_cast(
-      shape,
-      start,
-      direction,
-      query->ray.max_distance,
-      filter_of(query->ray.layer_mask, query->ray.ignore_entity)
-    );
+    const std::optional<physics::shape_cast_hit> hit =
+      world()->shape_cast(shape, start, direction, query->ray.max_distance, filter);
     if (!hit.has_value()) {
         return 0;
     }
+    *outHit = {};
     outHit->entity = marshal::from_entity(hit->entity);
     outHit->point = marshal::from_vec3(hit->point);
     outHit->normal = marshal::from_vec3(hit->normal);
     outHit->distance = hit->distance;
     outHit->layer = static_cast<int32_t>(hit->layer);
+    outHit->is_trigger = hit->isTrigger ? 1 : 0;
     return 1;
 }
 
@@ -295,6 +331,8 @@ int32_t conjure::bindings::entries::physics_overlap_sphere(
   const conjure_vec3 *center,
   float radius,
   uint32_t layerMask,
+  uint32_t flags,
+  uint64_t ignoreEntity,
   uint64_t *out,
   int32_t capacity
 ) {
@@ -309,9 +347,14 @@ int32_t conjure::bindings::entries::physics_overlap_sphere(
     if (world() == nullptr) {
         return unavailable(ID, "physics");
     }
+    int32_t status = 0;
+    physics::query_filter filter = {};
+    if (!filter_of(ID, layerMask, ignoreEntity, flags, filter, status)) {
+        return status;
+    }
     std::vector<ecs::entity> &found = scratch_entities();
     found.resize(scratch_size(capacity));
-    const u32 count = world()->overlap_sphere(marshal::to_vec3(*center), radius, found, filter_of(layerMask, 0));
+    const u32 count = world()->overlap_sphere(marshal::to_vec3(*center), radius, found, filter);
     return write_overlap(found, count, out, capacity);
 }
 
@@ -320,6 +363,8 @@ int32_t conjure::bindings::entries::physics_overlap_box(
   const conjure_vec3 *halfExtents,
   const conjure_quat_xyzw *rotation,
   uint32_t layerMask,
+  uint32_t flags,
+  uint64_t ignoreEntity,
   uint64_t *out,
   int32_t capacity
 ) {
@@ -334,17 +379,17 @@ int32_t conjure::bindings::entries::physics_overlap_box(
     if (world() == nullptr) {
         return unavailable(ID, "physics");
     }
+    int32_t status = 0;
+    physics::query_filter filter = {};
+    if (!filter_of(ID, layerMask, ignoreEntity, flags, filter, status)) {
+        return status;
+    }
     const math::quat orientation =
       rotation == nullptr ? math::quat(1.0f, 0.0f, 0.0f, 0.0f) : marshal::to_quat(*rotation);
     std::vector<ecs::entity> &found = scratch_entities();
     found.resize(scratch_size(capacity));
-    const u32 count = world()->overlap_box(
-      marshal::to_vec3(*center),
-      marshal::to_vec3(*halfExtents),
-      orientation,
-      found,
-      filter_of(layerMask, 0)
-    );
+    const u32 count =
+      world()->overlap_box(marshal::to_vec3(*center), marshal::to_vec3(*halfExtents), orientation, found, filter);
     return write_overlap(found, count, out, capacity);
 }
 

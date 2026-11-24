@@ -29,6 +29,27 @@ public readonly unsafe struct FrameStats
     public ulong FrameMemoryHighWater => _block.FrameMemoryHighWater;
 
     /// <summary>
+    /// Bytes the main thread allocated on the managed heap during the frame (GC.GetAllocatedBytesForCurrentThread
+    /// on the main thread; threads that scripts start are not counted). 0 without a running script host.
+    /// </summary>
+    public ulong ManagedAllocatedBytes => _block.ManagedAllocatedBytes;
+
+    /// <summary>
+    /// The managed heap size after the frame (GC.GetTotalMemory(false)). 0 without a running script host.
+    /// </summary>
+    public ulong ManagedHeapBytes => _block.ManagedHeapBytes;
+
+    /// <summary>
+    /// Garbage collections of any generation during the frame.
+    /// </summary>
+    public uint ManagedCollections => _block.ManagedCollections;
+
+    /// <summary>
+    /// Full (generation 2) garbage collections during the frame.
+    /// </summary>
+    public uint ManagedFullCollections => _block.ManagedFullCollections;
+
+    /// <summary>
     /// Milliseconds spent in engine phase index 'phase' (0..9, see EnginePhase); ArgumentOutOfRangeException
     /// otherwise.
     /// </summary>

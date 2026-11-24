@@ -53,6 +53,8 @@ namespace {
     constexpr std::string_view SQUAD_USER = "Conjure.TestScripts.SquadUser";
     constexpr std::string_view DYNAMIC_SCHEMA_PROBE = "Conjure.TestScripts.DynamicSchemaProbe";
     constexpr std::string_view FACADE_EXISTS_PROBE = "Conjure.TestScripts.FacadeExistsProbe";
+    constexpr std::string_view EXCLUDE_VELOCITY_PROBE = "Conjure.TestScripts.ExcludeVelocityProbe";
+    constexpr std::string_view EXCLUDE_INACTIVE_PROBE = "Conjure.TestScripts.ExcludeInactiveProbe";
 
     /// <summary>
     /// The Score {int Value; float Bonus} an entity holds, read from its column; nullopt without one.
@@ -72,6 +74,45 @@ namespace {
         std::memcpy(&read.value, raw, sizeof(read.value));
         std::memcpy(&read.bonus, static_cast<const std::byte *>(raw) + sizeof(read.value), sizeof(read.bonus));
         return read;
+    }
+
+    /// <summary>
+    /// Stand-ins for the scene's disabled and inactive tags in a world without the scene module: the same
+    /// registered names and the same empty layout, so Conjure.Components.Disabled and QueryExclude.Inactive
+    /// resolve to them.
+    /// </summary>
+    struct test_disabled_tag {};
+    struct test_inactive_tag {};
+}
+
+CONJURE_COMPONENT(test_disabled_tag, "conjure.scene.disabled");
+CONJURE_COMPONENT(test_inactive_tag, "conjure.scene.inactive");
+
+namespace {
+
+    /// <summary>
+    /// The rows a scope visits, over every chunk.
+    /// </summary>
+    [[nodiscard]] i32 row_count(const conjure_query_scope &scope) {
+        i32 rows = 0;
+        for (i32 chunk = 0; chunk < scope.chunk_count; ++chunk) {
+            rows += scope.chunks[chunk].count;
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// 'plain' entities with test_position only and 'moving' ones with test_position and test_velocity.
+    /// </summary>
+    void add_positions(scripting_fixture &fixture, u32 plain, u32 moving) {
+        for (u32 index = 0; index < plain; ++index) {
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(fixture.create_entity()));
+        }
+        for (u32 index = 0; index < moving; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity));
+            CONJURE_REQUIRE_OK(fixture.world.add<test_velocity>(entity));
+        }
     }
 }
 
@@ -840,6 +881,229 @@ TEST_SUITE("scripting/dod_query") {
         CHECK(fixture.runtime.open_query_scope_count() == 0);
         CHECK_FALSE(fixture.world.is_locked());
         CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("regression - code sweep W3-CS-L1 a scope with an exclusion list visits only the entities without it") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        add_positions(fixture, 5, 3);
+        const std::array<u32, 1> position = {fixture.registry.id_of<test_position>().value};
+        const std::array<u32, 1> velocity = {fixture.registry.id_of<test_velocity>().value};
+        i32 allRows = -1;
+        i32 rowsWithoutVelocity = -1;
+        bool velocityColumnSeen = false;
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            conjure_query_scope scope = {};
+            const core::result<u32> all = fixture.runtime.begin_query_scope(position, scope);
+            REQUIRE(all.has_value());
+            allRows = row_count(scope);
+            fixture.runtime.end_query_scope(all.value());
+
+            const core::result<u32> excluded = fixture.runtime.begin_query_scope(position, velocity, scope);
+            REQUIRE(excluded.has_value());
+            rowsWithoutVelocity = row_count(scope);
+            for (i32 chunk = 0; chunk < scope.chunk_count; ++chunk) {
+                // Only the requested types are columns: the excluded one never is.
+                velocityColumnSeen = velocityColumnSeen || scope.chunks[chunk].columns[1] != nullptr;
+            }
+            fixture.runtime.end_query_scope(excluded.value());
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        CHECK(allRows == 8);
+        CHECK(rowsWithoutVelocity == 5);
+        CHECK_FALSE(velocityColumnSeen);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK_FALSE(fixture.world.is_locked());
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("dod query - an exclusion list is part of the cached query's key") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        add_positions(fixture, 2, 2);
+        CONJURE_REQUIRE_OK(fixture.world.add<test_flags>(fixture.create_entity()));
+        const u32 positionId = fixture.registry.id_of<test_position>().value;
+        const u32 velocityId = fixture.registry.id_of<test_velocity>().value;
+        const u32 flagsId = fixture.registry.id_of<test_flags>().value;
+        const std::array<u32, 1> position = {positionId};
+        const std::array<u32, 1> velocity = {velocityId};
+        const std::array<u32, 2> velocityTwice = {velocityId, velocityId};
+        const std::array<u32, 2> velocityAndFlags = {velocityId, flagsId};
+        const std::array<u32, 2> flagsAndVelocity = {flagsId, velocityId};
+        std::vector<i32> rows = {};
+        const auto open = [&](std::span<const u32> with, std::span<const u32> without) {
+            conjure_query_scope scope = {};
+            const core::result<u32> opened = fixture.runtime.begin_query_scope(with, without, scope);
+            REQUIRE(opened.has_value());
+            rows.push_back(row_count(scope));
+            fixture.runtime.end_query_scope(opened.value());
+        };
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            open(position, {});
+            open(position, velocity);
+            open(position, velocityTwice);                      // the set {velocity}: the same query
+            open(position, velocityAndFlags);
+            open(position, flagsAndVelocity);                   // the same set in another order
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        REQUIRE(rows.size() == 5);
+        CHECK(rows[0] == 4);
+        CHECK(rows[1] == 2);
+        CHECK(rows[2] == 2);
+        CHECK(rows[3] == 2);
+        CHECK(rows[4] == 2);
+        // {position}, {position} without {velocity}, {position} without {velocity, flags}.
+        CHECK(fixture.runtime.cached_query_count() == 3);
+        CHECK(fixture.runtime.stats().cachedQueries == 3);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("dod query - begin_query_scope refuses a bad exclusion list and opens nothing") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        add_positions(fixture, 1, 1);
+        const u32 positionId = fixture.registry.id_of<test_position>().value;
+        const std::array<u32, 1> position = {positionId};
+        std::vector<u32> without = {};
+        SUBCASE("id 0 (an unresolved component)") {
+            without = {0};
+        }
+        SUBCASE("an id past the component limit") {
+            without = {static_cast<u32>(ecs::MAX_COMPONENTS)};
+        }
+        SUBCASE("an id nothing registered") {
+            without = {static_cast<u32>(ecs::MAX_COMPONENTS) - 1};
+        }
+        SUBCASE("an id that is also required") {
+            without = {positionId};
+        }
+        SUBCASE("nine ids") {
+            without.assign(static_cast<usize>(QUERY_MAX_COMPONENTS) + 1, fixture.registry.id_of<test_velocity>().value);
+        }
+        std::optional<core::result<u32>> outcome = std::nullopt;
+        conjure_query_scope scope = {};
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            outcome = fixture.runtime.begin_query_scope(position, without, scope);
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        REQUIRE(outcome.has_value());
+        CONJURE_CHECK_ERROR(*outcome, core::error_code::INVALID_ARGUMENT);
+        CHECK(scope.chunk_count == 0);
+        CHECK(scope.chunks == nullptr);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK(fixture.runtime.cached_query_count() == 0);
+        CHECK_FALSE(fixture.world.is_locked());
+    }
+
+    TEST_CASE("dod query - query_begin passes the exclusion list through the native table") {
+        log_capture logs = {};
+        logs.allow_errors();
+        scripting_fixture fixture = {};
+        add_positions(fixture, 3, 2);
+        conjure_native_api &api = fixture.runtime.native_api();
+        const std::array<u32, 1> position = {fixture.registry.id_of<test_position>().value};
+        const std::array<u32, 1> velocity = {fixture.registry.id_of<test_velocity>().value};
+        std::vector<i32> statuses = {};
+        std::vector<i32> rows = {};
+        const auto open = [&](const uint32_t *without, int32_t count) {
+            conjure_query_scope scope = {};
+            const i32 status = api.query_begin(position.data(), 1, without, count, &scope);
+            statuses.push_back(status);
+            rows.push_back(status == 0 ? row_count(scope) : -1);
+            if (status == 0) {
+                api.query_end(scope.scope_id);
+            }
+        };
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            open(nullptr, 0);                                   // no list: no pointer needed
+            open(velocity.data(), 0);                           // an empty list with a pointer
+            open(velocity.data(), 1);
+            open(nullptr, 1);                                   // a list without a pointer
+            open(velocity.data(), -1);
+            open(position.data(), 1);                           // required and excluded
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        REQUIRE(statuses.size() == 6);
+        CHECK(statuses[0] == 0);
+        CHECK(rows[0] == 5);
+        CHECK(statuses[1] == 0);
+        CHECK(rows[1] == 5);
+        CHECK(statuses[2] == 0);
+        CHECK(rows[2] == 3);
+        CHECK(statuses[3] == status_of(scripting_error::NOT_SUPPORTED));
+        CHECK(statuses[4] == status_of(scripting_error::NOT_SUPPORTED));
+        CHECK(statuses[5] == status_of(scripting_error::NOT_SUPPORTED));
+        CHECK(logs.contains(core::log_level::WARN, "both required and excluded"));
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+    }
+
+    TEST_CASE(
+      "dod query - ComponentQuery.Begin with a QueryExclude skips the excluded entities [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        for (u32 index = 0; index < 6; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity));
+            if (index < 2) {
+                CONJURE_REQUIRE_OK(fixture.world.add<test_velocity>(entity));
+            }
+        }
+        const script_entry_id probe = fixture.add_script(fixture.create_entity(), EXCLUDE_VELOCITY_PROBE);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_i64(probe, "AllRows") == 6);
+        CHECK(fixture.field_i64(probe, "RowsWithoutVelocity") == 4);
+        CHECK(fixture.field_i64(probe, "TwoColumnRowsWithoutVelocity") == 4);
+        CHECK(fixture.field_i64(probe, "FullListCount") == 8);
+        CHECK(fixture.field_i64(probe, "FullListRows") == 4);
+        CHECK(fixture.field_string(probe, "OverlapThrows") == "ArgumentException");
+        CHECK(fixture.field_string(probe, "NinthThrows") == "ArgumentException");
+        // The pointer form: the same exclusion, and its own checks made before native is called.
+        CHECK(fixture.field_i64(probe, "PointerRows") == 4);
+        CHECK(fixture.field_string(probe, "PointerNinthThrows") == "ArgumentOutOfRangeException");
+        CHECK(fixture.field_string(probe, "PointerNegativeThrows") == "ArgumentOutOfRangeException");
+        CHECK(fixture.field_string(probe, "PointerNullThrows") == "ArgumentNullException");
+        CHECK(fixture.field_string(probe, "PointerOverlapThrows") == "ArgumentException");
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "dod query - QueryExclude.Inactive skips disabled and inactive entities [dotnet]" * doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.registry.register_component<test_disabled_tag>());
+        CONJURE_REQUIRE_OK(fixture.registry.register_component<test_inactive_tag>());
+        for (u32 index = 0; index < 5; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity));
+            if (index == 0) {
+                CONJURE_REQUIRE_OK(fixture.world.add<test_disabled_tag>(entity));
+            }
+            if (index == 1) {
+                CONJURE_REQUIRE_OK(fixture.world.add<test_inactive_tag>(entity));
+            }
+            if (index == 2) {
+                CONJURE_REQUIRE_OK(fixture.world.add<test_disabled_tag>(entity));
+                CONJURE_REQUIRE_OK(fixture.world.add<test_inactive_tag>(entity));
+            }
+        }
+        const script_entry_id probe = fixture.add_script(fixture.create_entity(), EXCLUDE_INACTIVE_PROBE);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_i64(probe, "AllRows") == 5);
+        CHECK(fixture.field_i64(probe, "ActiveRows") == 2);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("dod query - PositionWriter frames allocate nothing after warm-up [dotnet]" * doctest::timeout(60)) {

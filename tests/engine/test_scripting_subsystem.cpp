@@ -281,7 +281,7 @@ TEST_SUITE("engine/scripting_subsystem") {
         input.gamepads[2].buttonsDown = 0x10;
         input.gamepads[2].axes[3] = 0.75f;
 
-        scripting_subsystem::write_frame_block(block, time, input);
+        scripting_subsystem::write_frame_block(block, time, input, nullptr);
         CHECK(block.time_seconds == 12.5);
         CHECK(block.unscaled_time_seconds == 13.0);
         CHECK(block.delta_time == 0.02f);

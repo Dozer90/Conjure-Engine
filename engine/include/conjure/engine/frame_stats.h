@@ -13,6 +13,11 @@
 
 namespace conjure::engine {
 
+    /// <summary>
+    /// One frame's statistics. The managed fields come from script_runtime::sample_managed_memory at step 15:
+    /// what the main thread allocated on the managed heap and the collections during the frame, and the heap size
+    /// after it; all 0 without a ready script host (or in a build without scripting).
+    /// </summary>
     struct frame_sample {
         f32 frameMilliseconds = 0.0f;
         std::array<f32, ecs::SYSTEM_PHASE_COUNT> phaseMilliseconds = {};
@@ -21,6 +26,10 @@ namespace conjure::engine {
         u32 fixedSteps = 0;
         u32 jobsExecuted = 0;
         usize frameMemoryHighWater = 0;
+        u64 managedAllocatedBytes = 0;          // bytes the main thread allocated on the managed heap this frame
+        u64 managedHeapBytes = 0;               // managed heap size after the frame
+        u32 managedCollections = 0;             // collections of any generation this frame
+        u32 managedFullCollections = 0;         // gen 2 collections this frame
         bool droppedFixedTime = false;
 
         [[nodiscard]] bool operator==(const frame_sample &) const = default;

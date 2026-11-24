@@ -65,8 +65,10 @@ class CONJURE_API script_runtime
 <tr><td>private</td><td><code class="signature">m<wbr>Faulted<wbr>Before<wbr>Mapped</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="script-runtime-faulted-slot.html">faulted_<wbr>slot</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mFrameBlock</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../native-api/conjure-frame-block.html">conjure_<wbr>frame_<wbr>block</a>&gt;</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Free<wbr>Query<wbr>Scopes</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr>std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="script-runtime-query-scope-state.html">query_<wbr>scope_<wbr>state</a>&gt;&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Has<wbr>Managed<wbr>Memory<wbr>Baseline</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mHost</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../script-host/script-host.html">script_<wbr>host</a>&gt;</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mInFlush</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Managed<wbr>Memory<wbr>Baseline</code></td><td><code class="signature"><a href="../native-api/conjure-managed-memory.html">conjure_managed_memory</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mMode</code></td><td><code class="signature"><a href="../script-runtime.html#symbol-script-mode">script_mode</a></code></td><td><code class="signature">script_<wbr>mode::<wbr>EDIT</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mNativeApi</code></td><td><code class="signature"><a href="../native-api/conjure-native-api.html">conjure_native_api</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mNextScopeId</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u32">u32</a></code></td><td><code class="signature"><span class="mi">1</span></code></td><td></td></tr>
@@ -133,15 +135,22 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-begin-query-scope-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<a href="../../core/types.html#symbol-u32">u32</a>&gt; begin_query_scope(
     std::span&lt;<span class="k">const</span> <a href="../../core/types.html#symbol-u32">u32</a>&gt; typeIds,
+    std::span&lt;<span class="k">const</span> <a href="../../core/types.html#symbol-u32">u32</a>&gt; withoutIds,
     <a href="../native-api/conjure-query-scope.html">conjure_query_scope</a> &amp;out);</code></pre></div>
 
-<p>Opens a scope over the archetypes holding every type: locks the world, fills the chunk views (columns in <code>typeIds</code> order, <code>null</code> for an absent id), bumps the change versions of the written columns. <code>WRONG_THREAD</code>, <code>NOT_IN_PHASE</code>, <code>NOT_INITIALISED</code>, <code>INVALID_ARGUMENT</code> (no world, bad id; id 0 is never valid). Allocation-free once warm: the <code><a href="../../ecs/query/query.html">ecs::query</a></code> behind a component set is cached for the life of the attached world (<code><a href="#function-cached-query-count-1">cached_query_count</a>()</code>) and finished scope states are reused, so the <code>scripting.update_10k_dod</code> gate of holds.</p>
+<p>Opens a scope over the archetypes holding every type of <code>typeIds</code> (1..8) and none of <code>withoutIds</code> (0..8): locks the world, fills the chunk views (columns in <code>typeIds</code> order, <code>null</code> for an absent id), bumps the change versions of the written columns (only <code>typeIds</code> are columns). <code>WRONG_THREAD</code>, <code>NOT_IN_PHASE</code>, <code>NOT_INITIALISED</code>, <code>INVALID_ARGUMENT</code> (no world, a bad or unregistered id in either list, a without id that is also in <code>typeIds</code>; id 0 is never valid). Allocation-free once warm: the <code><a href="../../ecs/query/query.html">ecs::query</a></code> behind a pair of component sets is cached for the life of the attached world (<code><a href="#function-cached-query-count-1">cached_query_count</a>()</code>) and finished scope states are reused, so the <code>scripting.update_10k_dod</code> gate of holds.</p>
+
+<div class="function-declaration" id="function-begin-query-scope-2"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<a href="../../core/types.html#symbol-u32">u32</a>&gt; begin_query_scope(
+    std::span&lt;<span class="k">const</span> <a href="../../core/types.html#symbol-u32">u32</a>&gt; typeIds,
+    <a href="../native-api/conjure-query-scope.html">conjure_query_scope</a> &amp;out);</code></pre></div>
+
+<p><code><a href="#function-begin-query-scope-1">begin_query_scope</a>(typeIds, {}, out)</code>: a scope that excludes nothing.</p>
 
 #### `cached_query_count` {#function-cached-query-count}
 
 <div class="function-declaration" id="function-cached-query-count-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/types.html#symbol-u32">u32</a> cached_query_count() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
-<p>Distinct component sets <code>begin_query_scope</code> has cached a query for since the world was attached.</p>
+<p>Distinct (with, without) component set pairs <code>begin_query_scope</code> has cached a query for since the world was attached.</p>
 
 #### `classes` {#function-classes}
 
@@ -439,6 +448,12 @@ class CONJURE_API script_runtime
 
 <p>One managed call for the phase, then the open query scopes are force-closed (<code>WARN</code>), the deferred commands flushed and <code><a href="#function-flush-pending-1">flush_pending</a>()</code> run while the phase is still current (so OnCreate/OnDestroy of that flush may open query scopes). Outside <code>run_phase</code> and <code>dispatch_collision_events</code> (<code>FIXED_UPDATE</code>) a query scope is refused with <code>NOT_IN_PHASE</code>: the flushes of <code>frame_begin</code>, <code>frame_end</code> and <code>set_mode</code> run no phase.</p>
 
+#### `sample_managed_memory` {#function-sample-managed-memory}
+
+<div class="function-declaration" id="function-sample-managed-memory-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="managed-memory-delta.html">managed_memory_delta</a> sample_managed_memory();</code></pre></div>
+
+<p>Samples the managed heap through <code>conjure_managed_api::sample_memory</code> (the engine calls it once per frame, at step 15 of, on the main thread) and returns what changed since the previous sample. Every field is 0 without a ready host or when the sample fails, and the next sample then starts over. The first sample after initialise, and a sample whose cumulative counters went down (the managed runtime restarted), report the heap size and 0 for the rest.</p>
+
 #### `script_component_id` {#function-script-component-id}
 
 <div class="function-declaration" id="function-script-component-id-1"><pre><code>[[<span class="na">nodiscard</span>]] ecs::component_id script_component_id() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
@@ -541,7 +556,7 @@ class CONJURE_API script_runtime
 #### `cached_query` {#function-cached-query}
 
 <div class="function-declaration" id="function-cached-query-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../ecs/query/query.html">ecs::query</a> &amp;cached_query(
-    <span class="k">const</span> <a href="../script-runtime.html#symbol-script-runtime-query-cache-key">query_cache_key</a> &amp;key,
+    <span class="k">const</span> <a href="script-runtime-query-cache-key.html">query_cache_key</a> &amp;key,
     <span class="k">const</span> <a href="../../ecs/query/query-desc.html">ecs::query_desc</a> &amp;desc);</code></pre></div>
 
 #### `destroy_slots` {#function-destroy-slots}

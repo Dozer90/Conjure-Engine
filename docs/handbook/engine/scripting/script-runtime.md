@@ -18,9 +18,11 @@ kind: header
 | File | Description |
 |---|---|
 | [`collision_event`](script-runtime/collision-event.md) | One contact the engine forwards from <code>physics_world::contact_events()</code>; dispatched to both participants&#x27; scripts with the normal flipped for b. |
+| [`managed_memory_delta`](script-runtime/managed-memory-delta.md) | The managed heap figures of one frame (<code>script_runtime::sample_managed_memory</code>). <code>allocatedBytes</code> and the collections are what happened since the previous sample on the main thread&#x27;s managed heap; <code>heapBytes</code> is the heap size now. Threads that scripts start are not counted. |
 | [`script_runtime::deferred_reservation`](script-runtime/script-runtime-deferred-reservation.md) | An id the scripting entries reserved through <code>mDeferredCommands</code> that no flush has applied yet. <code>held</code> follows the components the commands recorded so far give it, so <code>component_remove</code> can answer whether there is something to remove; an instantiation root gets its archive&#x27;s components at the flush, which the runtime cannot see (<code>heldKnown</code> <code>false</code>). |
 | [`script_runtime::faulted_slot`](script-runtime/script-runtime-faulted-slot.md) | <code>A</code> fault reported inside <code>create_instances</code>, before its slot was mapped (OnCreate or OnReload threw). |
 | [`script_runtime::pending_create`](script-runtime/script-runtime-pending-create.md) |  |
+| [`script_runtime::query_cache_key`](script-runtime/script-runtime-query-cache-key.md) | The component ids a scope requires (<code>with</code>) and excludes (<code>without</code>), each sorted ascending, without repeats and padded with <code>component_id::INVALID</code>: the same sets in any order, {a, a} included, find the same cached query (columns still follow the request order), and {a} without {b} is a different query from {a}. |
 | [`script_runtime::query_scope_state`](script-runtime/script-runtime-query-scope-state.md) |  |
 | [`script_runtime_config`](script-runtime/script-runtime-config.md) |  |
 | [`script_runtime_stats`](script-runtime/script-runtime-stats.md) | Snapshot of the runtime&#x27;s size for diagnostics and tests. |
@@ -41,16 +43,6 @@ enum class script_mode : u8 {
     PLAY        // live instances are authoritative, JSON is a snapshot
 };
 ```
-
-## Type Aliases
-
-### `script_runtime::query_cache_key` {#symbol-script-runtime-query-cache-key}
-
-```cpp
-using query_cache_key = std::array<u16, static_cast<usize>(QUERY_MAX_COMPONENTS)>;
-```
-
-The component ids of a scope sorted ascending, without repeats and padded with <code>component_id::INVALID</code>: the same set in any order, {a, a} included, finds the same cached query (columns still follow the request order).
 
 ## Functions
 
@@ -247,7 +239,9 @@ The component ids of a scope sorted ascending, without repeats and padded with <
 <a id="script_runtimewrite_set_entries_json"></a>
 <a id="script_runtimewrite_set_json"></a>
 <a id="structs-and-types"></a>
+<a id="symbol-script-runtime-query-cache-key"></a>
 <a id="tests"></a>
 <a id="threading-model"></a>
+<a id="type-aliases"></a>
 <a id="variables-and-properties"></a>
 <!-- doc-legacy-anchors:end -->

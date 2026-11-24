@@ -53,6 +53,7 @@ set(CONJURE_MANAGED_SDK_SOURCES
     Conjure.Managed/Api/Dod/ChunkView.cs
     Conjure.Managed/Api/Dod/ComponentQuery.cs
     Conjure.Managed/Api/Dod/ComponentType.cs
+    Conjure.Managed/Api/Dod/QueryExclude.cs
     Conjure.Managed/Interop/AssetRefBinder.cs
     Conjure.Managed/Interop/BindingStatus.g.cs
     Conjure.Managed/Interop/ConjureNativeException.cs
@@ -76,6 +77,11 @@ set(CONJURE_MANAGED_SDK_SOURCES
     Conjure.Managed/Api/Components/Audio/AudioMirrors.cs
     Conjure.Managed/Api/Components/Physics/PhysicsMirrors.cs
     Conjure.Managed/Api/Components/Scene/SceneMirrors.cs
+    Conjure.Managed/Api/Components/Renderer/RendererMirrors.cs
+    Conjure.Managed/Api/Camera.cs
+    Conjure.Managed/Api/Entity.Spawn.cs
+    Conjure.Managed/Api/Ray.cs
+    Conjure.Managed/Api/Screen.cs
 )
 
 # The SDK: building the bootstrap builds Conjure.Managed through its project reference and lays both
@@ -222,10 +228,13 @@ endif()
 # The test scripts: one project, three variants, built one after another (they share the SDK project).
 set(CONJURE_TEST_SCRIPT_SOURCES
     Conjure.TestScripts/BindingProbes.cs
+    Conjure.TestScripts/CameraProbes.cs
     Conjure.TestScripts/Collider.cs
     Conjure.TestScripts/DestroyProbe.cs
     Conjure.TestScripts/DodScripts.cs
+    Conjure.TestScripts/DrawProbe.cs
     Conjure.TestScripts/FieldKinds.cs
+    Conjure.TestScripts/FrameStatsProbe.cs
     Conjure.TestScripts/InspectorProbe.cs
     Conjure.TestScripts/LanguageVersionProbe.cs
     Conjure.TestScripts/LeakyTimer.cs
@@ -233,8 +242,10 @@ set(CONJURE_TEST_SCRIPT_SOURCES
     Conjure.TestScripts/Mover.cs
     Conjure.TestScripts/NativeCallProbe.cs
     Conjure.TestScripts/Probes.cs
+    Conjure.TestScripts/QueryFlagsProbe.cs
     Conjure.TestScripts/RegressionProbes.cs
     Conjure.TestScripts/ReloadProbe.cs
+    Conjure.TestScripts/SpawnProbes.cs
     Conjure.TestScripts/Spawner.cs
     Conjure.TestScripts/Throwers.cs
 )

@@ -454,6 +454,47 @@ TEST_SUITE("physics/queries") {
         CHECK(fixture.physics.raycast_all(down_from(5.0f), 10.0f, hits, movingOnly) == 0);
     }
 
+    TEST_CASE("shape_cast - isTrigger is set on a trigger volume and clear on a solid body") {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        // Along +x from x = -5: the trigger volume at the origin first, the solid wall at x = 5 behind it.
+        const ecs::entity trigger = fixture.create_at(math::vec3(0.0f, 0.0f, 0.0f));
+        physics::rigid_body body = {};
+        body.motionType = physics::motion_type::STATIC;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(trigger, body));
+        physics::box_collider volume = {};
+        volume.isTrigger = true;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(trigger, volume));
+        const ecs::entity wall = fixture.spawn_box(math::vec3(5.0f, 0.0f, 0.0f), physics::motion_type::STATIC);
+        fixture.run_step();
+
+        physics::query_filter withTriggers = {};
+        withTriggers.includeTriggers = true;
+        const math::transform start = math::transform::from_position(math::vec3(-5.0f, 0.0f, 0.0f));
+        const math::vec3 direction = math::vec3(1.0f, 0.0f, 0.0f);
+        const std::array<physics::cast_shape_desc, 3> shapes = {
+          physics::sphere_shape_desc{0.25f},
+          physics::box_shape_desc{math::vec3(0.25f)},
+          physics::capsule_shape_desc{0.25f, 0.25f},
+        };
+        for (usize index = 0; index < shapes.size(); ++index) {
+            CAPTURE(index);
+            const std::optional<physics::shape_cast_hit> volumeHit =
+              fixture.physics.shape_cast(shapes[index], start, direction, 20.0f, withTriggers);
+            REQUIRE(volumeHit.has_value());
+            CHECK(volumeHit->entity == trigger);
+            CHECK(volumeHit->isTrigger);
+
+            const std::optional<physics::shape_cast_hit> wallHit =
+              fixture.physics.shape_cast(shapes[index], start, direction, 20.0f);
+            REQUIRE(wallHit.has_value());
+            CHECK(wallHit->entity == wall);
+            CHECK_FALSE(wallHit->isTrigger);
+        }
+    }
+
     TEST_CASE("queries - during a push step or pull they assert and return nothing") {
         core::jobs::job_system jobs = {};
         physics_fixture fixture(jobs);

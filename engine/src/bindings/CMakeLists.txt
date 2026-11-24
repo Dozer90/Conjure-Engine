@@ -1,7 +1,7 @@
 # conjure_bindings - the bindings-owned entries of the native scripting table, the counting thunks, the
 # marshalling rules and the subsystem that fills the table before the handshake (docs/design/15_bindings.md).
-# Depends publicly on scripting, scene, assets and engine; physics, audio and renderer compile in under their
-# CONJURE_WITH_* options (the stubs cover a compiled-out group); modules and platform stay private.
+# Depends publicly on scripting, scene, assets and engine; physics, audio and renderer (the camera group) compile
+# in under their CONJURE_WITH_* options (the stubs cover a compiled-out group); modules and platform stay private.
 
 if(NOT CONJURE_WITH_SCRIPTING OR NOT TARGET conjure::scripting OR NOT TARGET conjure::engine)
     message(STATUS "bindings: scripting or engine is not available, module skipped")
@@ -29,6 +29,7 @@ set(CONJURE_BINDINGS_SOURCES
     entries_modules.cpp
     entries_prefab.cpp
     entries_scene.cpp
+    entries_spawn.cpp
     entries_transform.cpp
     entry_support.h
     log_category.cpp
@@ -51,6 +52,7 @@ if(CONJURE_WITH_AUDIO AND TARGET conjure::audio)
     list(APPEND CONJURE_BINDINGS_PRIVATE_DEPS conjure::audio)
 endif()
 if(CONJURE_WITH_RENDERER AND TARGET conjure::renderer)
+    list(APPEND CONJURE_BINDINGS_SOURCES entries_camera.cpp)
     list(APPEND CONJURE_BINDINGS_PRIVATE_DEPS conjure::renderer)
 endif()
 

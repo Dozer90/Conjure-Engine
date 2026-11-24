@@ -137,6 +137,7 @@ core::result<void> script_runtime::initialise(const script_runtime_config &confi
         return managedValid;
     }
     mStatus = script_host_status::READY;
+    mHasManagedMemoryBaseline = false;
 
     if (!config.gameAssemblyPath.empty()) {
         CONJURE_TRY(load_game_assembly(config.gameAssemblyPath));
@@ -150,6 +151,7 @@ void script_runtime::shutdown() {
         mHost->shutdown();
     }
     mStatus = script_host_status::UNINITIALISED;
+    mHasManagedMemoryBaseline = false;
     mAssemblyLoaded = false;
     mAssemblyPath.clear();
     mClasses.clear();
@@ -767,6 +769,14 @@ bool script_runtime::note_mirror_mismatch(u64 nameHash) {
 // DOD query scopes
 
 core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds, conjure_query_scope &out) {
+    return begin_query_scope(typeIds, std::span<const u32>(), out);
+}
+
+core::result<u32> script_runtime::begin_query_scope(
+  std::span<const u32> typeIds,
+  std::span<const u32> withoutIds,
+  conjure_query_scope &out
+) {
     out = {};
     if (!core::jobs::is_main_thread()) {
         return core::make_error(scripting_error::WRONG_THREAD, "query_begin off the main thread");
@@ -783,10 +793,14 @@ core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds
     if (typeIds.empty() || typeIds.size() > static_cast<usize>(QUERY_MAX_COMPONENTS)) {
         return core::error(core::error_code::INVALID_ARGUMENT, "query_begin needs 1..8 component types");
     }
+    if (withoutIds.size() > static_cast<usize>(QUERY_MAX_COMPONENTS)) {
+        return core::error(core::error_code::INVALID_ARGUMENT, "query_begin excludes at most 8 component types");
+    }
 
     ecs::query_desc desc = {};
     query_cache_key key = {};
-    key.fill(ecs::component_id::INVALID);
+    key.with.fill(ecs::component_id::INVALID);
+    key.without.fill(ecs::component_id::INVALID);
     for (usize index = 0; index < typeIds.size(); ++index) {
         const u32 typeId = typeIds[index];
         // 0 is unresolved_components: never handed out, so it means "lookup failed" (R4).
@@ -799,12 +813,36 @@ core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds
         }
         desc.with.set(id);
         desc.writes.set(id);
-        key[index] = id.value;
+        key.with[index] = id.value;
+    }
+    // Checked after the whole with-list is known, so the order of the two lists does not matter.
+    for (usize index = 0; index < withoutIds.size(); ++index) {
+        const u32 typeId = withoutIds[index];
+        if (typeId == 0 || typeId >= ecs::MAX_COMPONENTS) {
+            return core::error(core::error_code::INVALID_ARGUMENT, "query_begin: excluded component id out of range");
+        }
+        const ecs::component_id id{static_cast<u16>(typeId)};
+        if (!mWorld->registry().is_registered(id)) {
+            return core::error(
+              core::error_code::INVALID_ARGUMENT,
+              "query_begin: excluded component id is not registered"
+            );
+        }
+        if (desc.with.test(id)) {
+            return core::error(
+              core::error_code::INVALID_ARGUMENT,
+              "query_begin: a component cannot be both required and excluded"
+            );
+        }
+        desc.without.set(id);
+        key.without[index] = id.value;
     }
     // INVALID sorts behind every valid id, so the padding stays at the tail whatever the request order; a
     // repeated id ({a, a}) is the set {a}, so it collapses onto that set's key (the columns keep the request).
-    std::sort(key.begin(), key.end());
-    std::fill(std::unique(key.begin(), key.end()), key.end(), ecs::component_id::INVALID);
+    std::sort(key.with.begin(), key.with.end());
+    std::fill(std::unique(key.with.begin(), key.with.end()), key.with.end(), ecs::component_id::INVALID);
+    std::sort(key.without.begin(), key.without.end());
+    std::fill(std::unique(key.without.begin(), key.without.end()), key.without.end(), ecs::component_id::INVALID);
 
     // Like scheduler::run_system: a fresh version so the columns the scope stamps read as changed to the
     // systems that run after this phase.
@@ -959,6 +997,35 @@ script_runtime_stats script_runtime::stats() const noexcept {
     result.zombieAssemblies = mZombieAssemblies;
     result.cachedQueries = static_cast<u32>(mQueryCache.size());
     return result;
+}
+
+managed_memory_delta script_runtime::sample_managed_memory() {
+    managed_memory_delta delta = {};
+    if (!is_ready()) {
+        mHasManagedMemoryBaseline = false;
+        return delta;
+    }
+    conjure_managed_memory current = {};
+    const i32 sampled = mHost->managed_api().sample_memory(&current);
+    if (sampled < 0) {
+        mHasManagedMemoryBaseline = false;
+        return delta;
+    }
+
+    const conjure_managed_memory &previous = mManagedMemoryBaseline;
+    // The cumulative counters only grow while one managed runtime lives: a smaller one means it restarted, and
+    // that frame's growth cannot be told apart from the new runtime's start-up, so it reports none.
+    const bool restarted = current.thread_allocated_bytes < previous.thread_allocated_bytes
+      || current.gen0_collections < previous.gen0_collections || current.gen2_collections < previous.gen2_collections;
+    delta.heapBytes = current.heap_bytes;
+    if (mHasManagedMemoryBaseline && !restarted) {
+        delta.allocatedBytes = current.thread_allocated_bytes - previous.thread_allocated_bytes;
+        delta.collections = current.gen0_collections - previous.gen0_collections;
+        delta.fullCollections = current.gen2_collections - previous.gen2_collections;
+    }
+    mManagedMemoryBaseline = current;
+    mHasManagedMemoryBaseline = true;
+    return delta;
 }
 
 script_runtime *script_runtime::active() noexcept {

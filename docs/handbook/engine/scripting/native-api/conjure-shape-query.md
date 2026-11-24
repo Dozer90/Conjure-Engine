@@ -33,6 +33,7 @@ struct conjure_shape_query
 <tbody>
 <tr><td>public</td><td><code class="signature">half_extents</code></td><td><code class="signature"><a href="conjure-vec3.html">conjure_vec3</a></code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">pad</code></td><td><code class="signature">uint8_t[<span class="na">3</span>]</code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">pad_tail</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">radius</code></td><td><code class="signature"><span class="k">float</span></code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">ray</code></td><td><code class="signature"><a href="conjure-ray-query.html">conjure_ray_query</a></code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">rotation</code></td><td><code class="signature"><a href="conjure-quat-xyzw.html">conjure_quat_xyzw</a></code></td><td>—</td><td></td></tr>

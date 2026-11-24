@@ -47,15 +47,36 @@ public unsafe struct InputBlock
 }
 
 /// <summary>
-/// Mirror of conjure_frame_block: written by the engine before FRAME_BEGIN, read by Time and Input.
-/// Native pins the layout with static_asserts; Initialize checks the offsets below.
+/// Mirror of conjure_frame_block (512 bytes): written by the engine before FRAME_BEGIN, read by Time, Input and
+/// Screen. The screen fields are the game screen in pixels (0 x 0 while minimised or without a window), the
+/// framebuffer / logical ratio, the OS UI scale of the window's monitor and the WindowState bits. Native pins the
+/// layout with static_asserts; Initialize checks the size and the offsets below.
 /// </summary>
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = ExpectedSize)]
 public struct FrameBlock
 {
+    public const int ExpectedSize = 512;
     public const int ExpectedFrameIndexOffset = 32;
     public const int ExpectedInputOffset = 48;
     public const int ExpectedInputSize = 392;
+    public const int ExpectedScreenWidthOffset = 440;
+    public const int ExpectedUiScaleOffset = 456;
+    public const int ExpectedWindowStateOffset = 460;
+
+    /// <summary>
+    /// WindowState bit: the window has the input focus (FRAME_WINDOW_FOCUSED).
+    /// </summary>
+    public const byte WindowFocused = 1;
+
+    /// <summary>
+    /// WindowState bit: the window is minimised, so the screen is 0 x 0 (FRAME_WINDOW_MINIMISED).
+    /// </summary>
+    public const byte WindowMinimised = 2;
+
+    /// <summary>
+    /// WindowState bit: the window is borderless fullscreen (FRAME_WINDOW_FULLSCREEN).
+    /// </summary>
+    public const byte WindowFullscreen = 4;
 
     public double TimeSeconds;
     public double UnscaledTimeSeconds;
@@ -67,4 +88,10 @@ public struct FrameBlock
     public byte CurrentPhase;
     public byte InPlayMode;
     public InputBlock Input;
+    public uint ScreenWidth;
+    public uint ScreenHeight;
+    public float ContentScaleX;
+    public float ContentScaleY;
+    public float UiScale;
+    public byte WindowState;
 }

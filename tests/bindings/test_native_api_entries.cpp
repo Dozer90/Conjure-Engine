@@ -8,6 +8,7 @@
 #include "conjure/bindings/native_api_entries.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
+#include "conjure/core/result.h"
 #include "conjure/scripting/native_api.h"
 
 #include <array>
@@ -18,8 +19,9 @@
 #include <string_view>
 
 // native_api_entries.h (docs/design/15_bindings.md 3.1, B2, B3, 3.6): the table is complete after every
-// fill, stubs answer NOT_SUPPORTED naming the entry, the ten groups are exactly the documented ones, core
-// slots are untouched, foreign slots are overridden or kept, and the committed manifest matches the table.
+// fill, stubs answer NOT_SUPPORTED naming the entry, the eleven groups are exactly the documented ones, core
+// slots are untouched, foreign slots are overridden or kept, the committed manifest matches the table, and the
+// version 3 table holds the wave 3 entries (GAP-CSHARP) in their place with their signatures.
 
 using namespace conjure;
 using namespace conjure::bindings;
@@ -139,10 +141,11 @@ TEST_SUITE("bindings/native_api_entries") {
         CHECK_FALSE(group_compiled("log"));
     }
 
-    TEST_CASE("native_api_entries - owned groups are exactly the documented ten") {
+    TEST_CASE("native_api_entries - owned groups are exactly the documented eleven") {
         const std::set<std::string_view> groups = owned_groups();
         const std::set<std::string_view> expected = {
-          "transform", "entity", "scene", "prefab", "physics", "audio", "input", "asset", "diagnostics", "modules"
+          "transform", "entity", "scene", "prefab", "physics", "audio", "input", "asset", "diagnostics", "modules",
+          "camera"
         };
         CHECK(groups == expected);
         CHECK(groups.size() == BINDINGS_GROUP_COUNT);
@@ -152,6 +155,8 @@ TEST_SUITE("bindings/native_api_entries") {
                 CHECK(group_compiled(group) == (CONJURE_BINDINGS_GROUP_COMPILED(physics) == 1));
             } else if (group == "audio") {
                 CHECK(group_compiled(group) == (CONJURE_BINDINGS_GROUP_COMPILED(audio) == 1));
+            } else if (group == "camera") {
+                CHECK(group_compiled(group) == (CONJURE_BINDINGS_GROUP_COMPILED(camera) == 1));
             } else {
                 CHECK(group_compiled(group));
             }
@@ -159,6 +164,7 @@ TEST_SUITE("bindings/native_api_entries") {
         CHECK(CONJURE_BINDINGS_OWNS_GROUP(transform) == 1);
         CHECK(CONJURE_BINDINGS_OWNS_GROUP(entity) == 1);
         CHECK(CONJURE_BINDINGS_OWNS_GROUP(modules) == 1);
+        CHECK(CONJURE_BINDINGS_OWNS_GROUP(camera) == 1);
         CHECK(CONJURE_BINDINGS_OWNS_GROUP(log) == 0);
         CHECK(CONJURE_BINDINGS_OWNS_GROUP(query) == 0);
         // The five core entity entries stay scripting's.
@@ -266,6 +272,117 @@ TEST_SUITE("bindings/native_api_entries") {
         bindings::detail::clear_frame_failure_log();
         CHECK_FALSE(bindings::detail::failure_logged_this_frame(native_function_id::transform_get_local));
         CHECK_FALSE(bindings::detail::failure_logged_this_frame(native_function_id::COUNT));
+        clear_last_error();
+    }
+
+    TEST_CASE("native_api_entries - version 3 holds 132 entries and appends the wave 3 entries last") {
+        CHECK(CONJURE_NATIVE_API_VERSION == 3);
+        CHECK(NATIVE_FUNCTION_COUNT == 132);
+        CHECK(CONJURE_NATIVE_API_CORE_ENTRY_COUNT == 20);
+        CHECK(scripting::compute_native_api_hash() == CONJURE_NATIVE_API_HASH);
+
+        // Appended after entity_get_tag_text, in this order; the camera group is a bindings group of its own.
+        constexpr std::array<std::string_view, 6> TAIL = {
+          "entity_get_tag_text", "entity_spawn", "camera_main", "camera_screen_ray", "camera_screen_to_world",
+          "camera_world_to_screen"
+        };
+        for (usize offset = 0; offset < TAIL.size(); ++offset) {
+            CAPTURE(offset);
+            const u32 index = NATIVE_FUNCTION_COUNT - static_cast<u32>(TAIL.size()) + static_cast<u32>(offset);
+            const native_function_id id = static_cast<native_function_id>(index);
+            CHECK(function_name(id) == TAIL[offset]);
+            CHECK(is_bindings_owned(id));
+            CHECK(find_function(TAIL[offset]) == id);
+        }
+        CHECK(native_entry_descriptor_of(native_function_id::entity_spawn).group == "entity");
+        CHECK(native_entry_descriptor_of(native_function_id::camera_main).group == "camera");
+
+        // The signatures the generator normalised: the three entries changed in place and the five new ones.
+        CHECK(
+          native_entry_descriptor_of(native_function_id::query_begin).signature
+          == "int32_t (const uint32_t *ids, int32_t count, const uint32_t *withoutIds, int32_t withoutCount, "
+             "conjure_query_scope *out)"
+        );
+        CHECK(
+          native_entry_descriptor_of(native_function_id::physics_overlap_sphere).signature
+          == "int32_t (const conjure_vec3 *center, float radius, uint32_t layerMask, uint32_t flags, "
+             "uint64_t ignoreEntity, uint64_t *out, int32_t capacity)"
+        );
+        CHECK(
+          native_entry_descriptor_of(native_function_id::physics_overlap_box).signature
+          == "int32_t (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw "
+             "*rotation, uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity)"
+        );
+        CHECK(
+          native_entry_descriptor_of(native_function_id::entity_spawn).signature
+          == "int32_t (const conjure_spawn_desc *desc, uint64_t *outEntities)"
+        );
+        CHECK(native_entry_descriptor_of(native_function_id::camera_main).signature == "uint64_t (void)");
+        CHECK(
+          native_entry_descriptor_of(native_function_id::camera_screen_ray).signature
+          == "int32_t (uint64_t camera, const conjure_vec2 *screenPixels, conjure_vec3 *outOrigin, "
+             "conjure_vec3 *outDirection)"
+        );
+        CHECK(
+          native_entry_descriptor_of(native_function_id::camera_screen_to_world).signature
+          == "int32_t (uint64_t camera, const conjure_vec3 *screenPixelsAndDepth, conjure_vec3 *outWorld)"
+        );
+        CHECK(
+          native_entry_descriptor_of(native_function_id::camera_world_to_screen).signature
+          == "int32_t (uint64_t camera, const conjure_vec3 *world, conjure_vec3 *outScreenPixelsAndDepth)"
+        );
+    }
+
+    TEST_CASE("native_api_entries - the camera group needs the world and the scenes and follows the renderer") {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+        CHECK(CONJURE_BINDINGS_GROUP_COMPILED(camera) == 1);
+#else
+        CHECK(CONJURE_BINDINGS_GROUP_COMPILED(camera) == 0);
+#endif
+        CHECK(group_compiled("camera") == (CONJURE_BINDINGS_GROUP_COMPILED(camera) == 1));
+        CHECK_FALSE(group_available("camera", binding_context{}));
+        bare_fixture fixture = {};
+        CHECK(group_available("camera", fixture.context) == group_compiled("camera"));
+        binding_context noScenes = fixture.context;
+        noScenes.scenes = nullptr;
+        CHECK_FALSE(group_available("camera", noScenes));
+        binding_context noWorld = fixture.context;
+        noWorld.world = nullptr;
+        CHECK_FALSE(group_available("camera", noWorld));
+    }
+
+    TEST_CASE("native_api_entries - the entries this build has not implemented answer NOT_SUPPORTED by name") {
+        bare_fixture fixture = {};
+        const conjure_native_api &api = fixture.api();
+        clear_last_error();
+
+        // entity_spawn: installed as the entity group's implementation, which refuses every request.
+        CHECK(is_implementation_installed(api, native_function_id::entity_spawn));
+        conjure_spawn_desc desc = {};
+        desc.count = 1;
+        std::array<uint64_t, 1> spawned = {};
+        CHECK(api.entity_spawn(&desc, spawned.data()) == to_status(bindings_error::NOT_SUPPORTED));
+        CHECK(last_error_code() == bindings_error::NOT_SUPPORTED);
+        CHECK(last_error_message() == "entity_spawn: not implemented in this build");
+        CHECK(spawned[0] == 0);
+
+        // camera_*: the implementation with the renderer, the stubs without it; NOT_SUPPORTED either way.
+        CHECK(is_implementation_installed(api, native_function_id::camera_main) == group_compiled("camera"));
+        clear_last_error();
+        CHECK(api.camera_main() == 0);
+        CHECK(last_error_code() == bindings_error::NOT_SUPPORTED);
+        const conjure_vec2 pixels = {1.0f, 2.0f};
+        const conjure_vec3 point = {1.0f, 2.0f, 3.0f};
+        conjure_vec3 origin = {};
+        conjure_vec3 direction = {};
+        CHECK(api.camera_screen_ray(1, &pixels, &origin, &direction) == to_status(bindings_error::NOT_SUPPORTED));
+        CHECK(api.camera_screen_to_world(1, &point, &origin) == to_status(bindings_error::NOT_SUPPORTED));
+        CHECK(api.camera_world_to_screen(1, &point, &origin) == to_status(bindings_error::NOT_SUPPORTED));
+        if (group_compiled("camera")) {
+            CHECK(last_error_message() == "camera_world_to_screen: not implemented in this build");
+        } else {
+            CHECK(last_error_message() == "camera_world_to_screen: subsystem unavailable");
+        }
         clear_last_error();
     }
 

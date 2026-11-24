@@ -500,3 +500,150 @@ public struct Seats
     public byte Row;
     public long Pad1;
 }
+
+/// <summary>
+/// Mirror of the native test component "test.scripting.velocity" {f32 x, y}.
+/// </summary>
+[NativeComponent("test.scripting.velocity")]
+[StructLayout(LayoutKind.Sequential)]
+public struct TestVelocity
+{
+    public float X;
+    public float Y;
+}
+
+/// <summary>
+/// The ComponentQuery exclusion list: counts the TestPosition rows with and without a TestVelocity excluded (one
+/// and two columns, a full list of eight exclusions and the pointer form), and records what the refused requests
+/// throw, the pointer form's own checks included.
+/// </summary>
+public sealed class ExcludeVelocityProbe : ScriptBehaviour
+{
+    public int AllRows;
+    public int RowsWithoutVelocity;
+    public int TwoColumnRowsWithoutVelocity;
+    public int FullListRows;
+    public int FullListCount;
+    public string OverlapThrows = "";
+    public string NinthThrows = "";
+    public int PointerRows;
+    public string PointerNinthThrows = "";
+    public string PointerNegativeThrows = "";
+    public string PointerNullThrows = "";
+    public string PointerOverlapThrows = "";
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        using (ComponentQuery all = ComponentQuery.Begin<TestPosition>())
+        {
+            AllRows = all.EntityCount;
+        }
+        using (ComponentQuery single = ComponentQuery.Begin<TestPosition>(QueryExclude.Of<TestVelocity>()))
+        {
+            RowsWithoutVelocity = single.EntityCount;
+        }
+        using (ComponentQuery pair = ComponentQuery.Begin<TestPosition, TestPosition>(QueryExclude.Of<TestVelocity>()))
+        {
+            TwoColumnRowsWithoutVelocity = pair.EntityCount;
+        }
+        QueryExclude full = FullList();
+        FullListCount = full.Count;
+        using (ComponentQuery fullQuery = ComponentQuery.Begin<TestPosition>(full))
+        {
+            FullListRows = fullQuery.EntityCount;
+        }
+
+        try
+        {
+            using ComponentQuery overlap = ComponentQuery.Begin<TestPosition>(QueryExclude.Of<TestPosition>());
+            OverlapThrows = "none";
+        }
+        catch (Exception exception)
+        {
+            OverlapThrows = exception.GetType().Name;
+        }
+        try
+        {
+            FullList().And<TestVelocity>();
+            NinthThrows = "none";
+        }
+        catch (Exception exception)
+        {
+            NinthThrows = exception.GetType().Name;
+        }
+
+        PointerRows = PointerQueryRows();
+        PointerNinthThrows = PointerThrows(QueryExclude.MaxCount + 1, false, false);
+        PointerNegativeThrows = PointerThrows(-1, false, false);
+        PointerNullThrows = PointerThrows(1, true, false);
+        PointerOverlapThrows = PointerThrows(1, false, true);
+    }
+
+    // ComponentQuery.Begin(ids, 1, without, 1) excluding TestVelocity: the rows it visits.
+    private static unsafe int PointerQueryRows()
+    {
+        uint* ids = stackalloc uint[1];
+        ids[0] = ComponentType<TestPosition>.RequireId();
+        uint* without = stackalloc uint[1];
+        without[0] = ComponentType<TestVelocity>.RequireId();
+        using ComponentQuery query = ComponentQuery.Begin(ids, 1, without, 1);
+        return query.EntityCount;
+    }
+
+    // What ComponentQuery.Begin(ids, 1, without, withoutCount) throws for TestPosition, the exclusion list holding
+    // TestVelocity (null when 'nullWithout'; its first id TestPosition when 'excludeRequired'); "none" when the
+    // scope opened.
+    private static unsafe string PointerThrows(int withoutCount, bool nullWithout, bool excludeRequired)
+    {
+        uint* ids = stackalloc uint[1];
+        ids[0] = ComponentType<TestPosition>.RequireId();
+        uint* without = stackalloc uint[QueryExclude.MaxCount + 1];
+        for (int index = 0; index <= QueryExclude.MaxCount; ++index)
+        {
+            without[index] = ComponentType<TestVelocity>.RequireId();
+        }
+        if (excludeRequired)
+        {
+            without[0] = ids[0];
+        }
+        try
+        {
+            using ComponentQuery query = ComponentQuery.Begin(ids, 1, nullWithout ? null : without, withoutCount);
+            return "none";
+        }
+        catch (Exception exception)
+        {
+            return exception.GetType().Name;
+        }
+    }
+
+    // QueryExclude.MaxCount exclusions (the one component, repeated).
+    private static QueryExclude FullList()
+    {
+        QueryExclude exclude = QueryExclude.Of<TestVelocity>();
+        while (exclude.Count < QueryExclude.MaxCount)
+        {
+            exclude = exclude.And<TestVelocity>();
+        }
+        return exclude;
+    }
+}
+
+/// <summary>
+/// Counts the TestPosition rows ComponentQuery visits with and without QueryExclude.Inactive.
+/// </summary>
+public sealed class ExcludeInactiveProbe : ScriptBehaviour
+{
+    public int AllRows;
+    public int ActiveRows;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        using (ComponentQuery all = ComponentQuery.Begin<TestPosition>())
+        {
+            AllRows = all.EntityCount;
+        }
+        using ComponentQuery active = ComponentQuery.Begin<TestPosition>(QueryExclude.Inactive);
+        ActiveRows = active.EntityCount;
+    }
+}

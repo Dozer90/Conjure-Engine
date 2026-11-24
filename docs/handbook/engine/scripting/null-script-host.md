@@ -11,12 +11,13 @@ kind: header
 | File Path | `engine/include/conjure/scripting/null_script_host.h` |
 | API ↗ | [Hosting, the native API and hot reload](../../../api/scripting/hosting-and-hot-reload.md), [Scripting](../../../api/scripting/index.md) |
 
-<p>The <code>C</code>++ fake of the managed side. It implements <code><a href="native-api/conjure-managed-api.html">conjure_managed_api</a></code> with recording functions: slots come from a LIFO free list, <code>apply_fields</code> stores the blob per slot and <code>collect_fields</code> echoes it, <code>run_phase</code> and <code>dispatch_collisions</code> are logged, <code>load_game_assembly</code> registers fake classes (<code>add_fake_class</code> and an optional &lt;assembly&gt;.<code>classes.json</code> fixture) through the native table so the registry, blob and reload paths all run without .NET. Every scripting, scene, engine and editor test uses it; one <code>null</code> host is active (initialised) at a time.</p>
+<p>The <code>C</code>++ fake of the managed side. It implements <code><a href="native-api/conjure-managed-api.html">conjure_managed_api</a></code> with recording functions: slots come from a LIFO free list, <code>apply_fields</code> stores the blob per slot and <code>collect_fields</code> echoes it, <code>run_phase</code>, <code>dispatch_collisions</code> and <code>set_active</code> are logged, <code>sample_memory</code> reports the figures <code>set_managed_memory</code> gave it, <code>load_game_assembly</code> registers fake classes (<code>add_fake_class</code> and an optional &lt;assembly&gt;.<code>classes.json</code> fixture) through the native table so the registry, blob and reload paths all run without .NET. Every scripting, scene, engine and editor test uses it; one <code>null</code> host is active (initialised) at a time.</p>
 
 ## Structs
 
 | File | Description |
 |---|---|
+| [`null_host_recorder::activity_record`](null-script-host/null-host-recorder-activity-record.md) | One slot of a <code>set_active</code> call: the state asked for and whether the slot was live and changed. |
 | [`null_host_recorder::apply_record`](null-script-host/null-host-recorder-apply-record.md) |  |
 | [`null_host_recorder::collision_record`](null-script-host/null-host-recorder-collision-record.md) |  |
 | [`null_host_recorder::create_record`](null-script-host/null-host-recorder-create-record.md) |  |
@@ -32,6 +33,14 @@ kind: header
 | [`null_script_host`](null-script-host/null-script-host.md) |  |
 
 ## Type Aliases
+
+### `null_script_host::activity_hook` {#symbol-null-script-host-activity-hook}
+
+```cpp
+using activity_hook = std::function<void(i32 slot, bool active)>;
+```
+
+Runs inside <code>set_active</code> for every live slot whose state changed, after the change: what OnEnable (active) or OnDisable (inactive) would do.
 
 ### `null_script_host::collision_hook` {#symbol-null-script-host-collision-hook}
 

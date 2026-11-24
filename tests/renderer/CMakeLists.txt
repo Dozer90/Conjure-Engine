@@ -23,6 +23,7 @@ set(CONJURE_RENDERER_TEST_SOURCES
     test_components.cpp
     test_culling.cpp
     test_debug_draw.cpp
+    test_debug_font.cpp
     test_draw_list_builder.cpp
     test_environment_asset.cpp
     test_exposure_math.cpp

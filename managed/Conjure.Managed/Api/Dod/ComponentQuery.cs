@@ -5,20 +5,20 @@ using Conjure.Interop;
 namespace Conjure.Dod;
 
 /// <summary>
-/// A structural-locked scope over every chunk holding the requested components (docs/design/03_scripting.md
-/// 3.9). Use with 'using': the world stays locked until Dispose; structural requests made inside are
-/// deferred to the end of the scope, and a scope still open at the end of the phase is force-closed with a
-/// warning. Entity.Create inside the scope returns a reserved entity that is not alive until the scope closes
-/// (IsAlive, HasComponent and GetComponent answer as for a dead entity); its AddComponent, SetComponent,
-/// RemoveComponent, AddScript and Destroy calls and its Name, Tag, Layer and Enabled setters are recorded behind
-/// the create and applied when the scope closes (the component requests in call order), so the entity is created
-/// with its components and scripts then. The writes of the component facades (Transform, Rigidbody,
-/// CharacterController, AudioSource) on it are kept in call order and made once the scope closes, right after the
-/// flush that created it, so after every component request of the scope; their reads throw as for a dead entity.
-/// The query is a mutable ref struct: a copy keeps the scope's chunk pointers after the original's Dispose, and
-/// the spans of its chunks point into native memory. Neither a copy nor a span may be used after Dispose
-/// (undefined; outside Distribution the native side overwrites the chunk views at the end of the scope, which
-/// catches some of these uses, never all).
+/// A structural-locked scope over every chunk holding the requested components and none of the excluded ones (the Begin
+/// overloads taking a QueryExclude or excluded ids; docs/design/03_scripting.md 3.9). Use with 'using': the world stays
+/// locked until Dispose; structural requests made inside are deferred to the end of the scope, and a scope still open
+/// at the end of the phase is force-closed with a warning. Entity.Create inside the scope returns a reserved entity
+/// that is not alive until the scope closes (IsAlive, HasComponent and GetComponent answer as for a dead entity); its
+/// AddComponent, SetComponent, RemoveComponent, AddScript and Destroy calls and its Name, Tag, Layer and Enabled
+/// setters are recorded behind the create and applied when the scope closes (the component requests in call order), so
+/// the entity is created with its components and scripts then. The writes of the component facades (Transform,
+/// Rigidbody, CharacterController, AudioSource) on it are kept in call order and made once the scope closes, right
+/// after the flush that created it, so after every component request of the scope; their reads throw as for a dead
+/// entity. The query is a mutable ref struct: a copy keeps the scope's chunk pointers after the original's Dispose, and
+/// the spans of its chunks point into native memory. Neither a copy nor a span may be used after Dispose (undefined;
+/// outside Distribution the native side overwrites the chunk views at the end of the scope, which catches some of these
+/// uses, never all).
 /// </summary>
 public unsafe ref struct ComponentQuery
 {
@@ -65,15 +65,106 @@ public unsafe ref struct ComponentQuery
     }
 
     /// <summary>
+    /// Begin&lt;T1&gt;() that skips the entities holding any component of 'exclude'.
+    /// </summary>
+    public static ComponentQuery Begin<T1>(in QueryExclude exclude) where T1 : unmanaged
+    {
+        uint* ids = stackalloc uint[1];
+        ids[0] = ComponentType<T1>.RequireId();
+        uint* without = stackalloc uint[QueryExclude.MaxCount];
+        int withoutCount = exclude.CopyTo(without);
+        return Begin(ids, 1, without, withoutCount);
+    }
+
+    /// <summary>
+    /// Begin&lt;T1, T2&gt;() that skips the entities holding any component of 'exclude'.
+    /// </summary>
+    public static ComponentQuery Begin<T1, T2>(in QueryExclude exclude) where T1 : unmanaged where T2 : unmanaged
+    {
+        uint* ids = stackalloc uint[2];
+        ids[0] = ComponentType<T1>.RequireId();
+        ids[1] = ComponentType<T2>.RequireId();
+        uint* without = stackalloc uint[QueryExclude.MaxCount];
+        int withoutCount = exclude.CopyTo(without);
+        return Begin(ids, 2, without, withoutCount);
+    }
+
+    /// <summary>
+    /// Begin&lt;T1, T2, T3&gt;() that skips the entities holding any component of 'exclude'.
+    /// </summary>
+    public static ComponentQuery Begin<T1, T2, T3>(in QueryExclude exclude)
+        where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged
+    {
+        uint* ids = stackalloc uint[3];
+        ids[0] = ComponentType<T1>.RequireId();
+        ids[1] = ComponentType<T2>.RequireId();
+        ids[2] = ComponentType<T3>.RequireId();
+        uint* without = stackalloc uint[QueryExclude.MaxCount];
+        int withoutCount = exclude.CopyTo(without);
+        return Begin(ids, 3, without, withoutCount);
+    }
+
+    /// <summary>
+    /// Begin&lt;T1, T2, T3, T4&gt;() that skips the entities holding any component of 'exclude'.
+    /// </summary>
+    public static ComponentQuery Begin<T1, T2, T3, T4>(in QueryExclude exclude)
+        where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged
+    {
+        uint* ids = stackalloc uint[4];
+        ids[0] = ComponentType<T1>.RequireId();
+        ids[1] = ComponentType<T2>.RequireId();
+        ids[2] = ComponentType<T3>.RequireId();
+        ids[3] = ComponentType<T4>.RequireId();
+        uint* without = stackalloc uint[QueryExclude.MaxCount];
+        int withoutCount = exclude.CopyTo(without);
+        return Begin(ids, 4, without, withoutCount);
+    }
+
+    /// <summary>
     /// Opens a scope over explicit component ids (1..8). A refused scope throws InvalidOperationException
     /// naming the reason, for example NOT_IN_PHASE outside the script phases and their flushes.
     /// </summary>
-    public static ComponentQuery Begin(uint* ids, int count)
+    public static ComponentQuery Begin(uint* ids, int count) => Begin(ids, count, null, 0);
+
+    /// <summary>
+    /// Opens a scope over explicit component ids (1..8) that skips the entities holding any of 'withoutIds'
+    /// (0..8 ids; null when 'withoutCount' is 0). ArgumentOutOfRangeException for a 'withoutCount' outside 0..8,
+    /// ArgumentNullException for null 'withoutIds' with a positive count, ArgumentException when an id is both
+    /// required and excluded; a scope native refuses throws InvalidOperationException naming the reason, as
+    /// Begin(ids, count) does.
+    /// </summary>
+    public static ComponentQuery Begin(uint* ids, int count, uint* withoutIds, int withoutCount)
     {
+        if (withoutCount < 0 || withoutCount > QueryExclude.MaxCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(withoutCount),
+                withoutCount,
+                "a ComponentQuery excludes 0.." + QueryExclude.MaxCount + " components");
+        }
+        if (withoutCount > 0 && withoutIds == null)
+        {
+            throw new ArgumentNullException(nameof(withoutIds));
+        }
+        // Reads no more required ids than native accepts (1..8): a larger count is native's to refuse, and the
+        // caller's buffer may hold no more than that.
+        int checkedCount = Math.Min(count, QueryExclude.MaxCount);
+        for (int excluded = 0; excluded < withoutCount && ids != null; ++excluded)
+        {
+            for (int required = 0; required < checkedCount; ++required)
+            {
+                if (withoutIds[excluded] == ids[required])
+                {
+                    throw new ArgumentException(
+                        "component id " + ids[required] + " is both required and excluded by the ComponentQuery",
+                        nameof(withoutIds));
+                }
+            }
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->QueryBegin, NativeFunction.QueryBegin);
         QueryScope scope = default;
-        int status = api->QueryBegin(ids, count, &scope);
+        int status = api->QueryBegin(ids, count, withoutIds, withoutCount, &scope);
         if (status < 0)
         {
             throw new InvalidOperationException(BeginFailure(status));
@@ -102,8 +193,8 @@ public unsafe ref struct ComponentQuery
             "scene start, frame end or a mode change, and OnReload after a hot reload, run outside a script phase " +
             "(NOT_IN_PHASE)",
         16 => "ComponentQuery.Begin needs a running script runtime (NOT_INITIALISED)",
-        17 => "ComponentQuery.Begin was refused: it needs 1..8 registered component ids and an attached world " +
-            "(NOT_SUPPORTED, see the log)",
+        17 => "ComponentQuery.Begin was refused: it needs 1..8 registered component ids, at most 8 registered " +
+            "excluded ids that are not also required, and an attached world (NOT_SUPPORTED, see the log)",
         _ => "ComponentQuery.Begin failed with scripting status " + status,
     };
 

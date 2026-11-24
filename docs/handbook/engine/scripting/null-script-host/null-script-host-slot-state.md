@@ -31,6 +31,7 @@ struct slot_state
 <table class="variable-table">
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td>public</td><td><code class="signature">active</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">true</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">classHash</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">collect<wbr>Override</code></td><td><code class="signature">std::<wbr>optional&lt;<wbr>std::<wbr>vector&lt;<wbr><a href="../../core/types.html#symbol-u8">u8</a>&gt;&gt;</code></td><td><code class="signature">std::nullopt</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">entity</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>

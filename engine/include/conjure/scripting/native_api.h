@@ -3,6 +3,7 @@
 #include "conjure/scripting/native_api_hash.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/enum_flags.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -33,7 +34,10 @@
 // check of validate_managed_api (a same-size reorder or retype is not caught).
 
 // Version 2: the layout hash also covers the records and the managed table (sweep F445).
-#define CONJURE_NATIVE_API_VERSION 2
+// Version 3 (wave 3, GAP-CSHARP): query_begin takes an exclusion list, the overlap entries take query flags and an
+// ignored entity, the query records carry flags and the hit record is_trigger, the frame block carries the game
+// screen, the stats block the managed-memory figures, and the managed table gains sample_memory and set_active.
+#define CONJURE_NATIVE_API_VERSION 3
 
 // The X-macro table. It is expanded once per translation unit (the struct below); the descriptor table
 // of native_entry_descriptors() comes from CONJURE_NATIVE_API_FOR_EACH_ENTRY in the generated
@@ -119,7 +123,10 @@ struct conjure_input_block {
 };
 
 /// <summary>
-/// Written once per frame by the engine before FRAME_BEGIN and read directly by Time and Input in C#.
+/// Written once per frame by the engine before FRAME_BEGIN and read directly by Time, Input and Screen in C#.
+/// The screen fields are engine::game_screen_of(window) (conjure/engine/game_screen.h): the framebuffer in pixels
+/// (0 x 0 while minimised or without a window), the framebuffer / logical ratio, the OS UI scale of the window's
+/// monitor, and window_state, a set of the FRAME_WINDOW_* bits of conjure::scripting.
 /// </summary>
 struct alignas(64) conjure_frame_block {
     double time_seconds;
@@ -132,7 +139,13 @@ struct alignas(64) conjure_frame_block {
     uint8_t current_phase;
     uint8_t in_play_mode;
     conjure_input_block input;
-    uint8_t padding[8];         // explicit tail padding: 440 content bytes rounded to the 64-byte alignment
+    uint32_t screen_width;
+    uint32_t screen_height;
+    float content_scale_x;
+    float content_scale_y;
+    float ui_scale;
+    uint8_t window_state;
+    uint8_t padding[51];        // explicit tail padding: 461 content bytes rounded to the 64-byte alignment
 };
 
 /*===========================================================================*/
@@ -221,12 +234,17 @@ struct conjure_query_scope {
 /*===========================================================================*/
 // Bindings records (R26; 15_bindings.md 2.4)
 
+/// <summary>
+/// A ray query; flags is a set of conjure_query_flags, and a bit outside it is refused with INVALID_ARGUMENT.
+/// </summary>
 struct conjure_ray_query {
     conjure_vec3 origin;
     conjure_vec3 direction;
     float max_distance;
     uint32_t layer_mask;
     uint64_t ignore_entity;
+    uint32_t flags;
+    uint32_t pad;
 };
 
 struct conjure_shape_query {
@@ -236,14 +254,20 @@ struct conjure_shape_query {
     conjure_vec3 half_extents;
     float radius;
     conjure_quat_xyzw rotation;
+    uint32_t pad_tail;
 };
 
+/// <summary>
+/// One query hit; is_trigger is 1 when the body hit is a trigger volume (hit only with INCLUDE_TRIGGERS).
+/// </summary>
 struct conjure_raycast_hit {
     uint64_t entity;
     conjure_vec3 point;
     conjure_vec3 normal;
     float distance;
     int32_t layer;
+    uint8_t is_trigger;
+    uint8_t pad[7];
 };
 
 struct conjure_asset_info {
@@ -263,6 +287,10 @@ struct conjure_module_record {
     uint32_t feature_flags;
 };
 
+/// <summary>
+/// The last committed engine::frame_sample. The managed_* fields are its managed-heap figures (the main thread's
+/// allocations, the heap size and the collections of that frame), 0 in a frame without a ready script host.
+/// </summary>
 struct conjure_frame_stats_block {
     float frame_ms;
     float phase_ms[10];
@@ -270,7 +298,72 @@ struct conjure_frame_stats_block {
     uint32_t fixed_steps;
     uint32_t jobs_executed;
     uint64_t frame_memory_high_water;
+    uint64_t managed_allocated_bytes;
+    uint64_t managed_heap_bytes;
+    uint32_t managed_collections;
+    uint32_t managed_full_collections;
 };
+
+/// <summary>
+/// One component of an entity_spawn request: type_id is the id component_lookup_type or
+/// component_register_managed returned, stride the bytes between two entities' values (0: 'data' is one value
+/// for every entity) and data the values (nullptr: the registered default value).
+/// </summary>
+struct conjure_spawn_component {
+    uint32_t type_id;
+    uint32_t stride;
+    const void *data;
+};
+
+/// <summary>
+/// An entity_spawn request: 'count' entities (1..65536) holding the 'component_count' components (0..8) each.
+/// parent is read with SCENE_ENTITIES only (0: scene roots); flags is a set of conjure_spawn_flags.
+/// </summary>
+struct conjure_spawn_desc {
+    const conjure_spawn_component *components;
+    int32_t component_count;
+    int32_t count;
+    uint64_t parent;
+    uint32_t flags;
+    uint32_t pad;
+};
+
+/// <summary>
+/// What conjure_managed_api::sample_memory reports: thread_allocated_bytes is
+/// GC.GetAllocatedBytesForCurrentThread() on the calling (main) thread, heap_bytes GC.GetTotalMemory(false), and
+/// the collections GC.CollectionCount(0) and GC.CollectionCount(2). Everything but heap_bytes is cumulative over
+/// the life of the managed runtime.
+/// </summary>
+struct conjure_managed_memory {
+    uint64_t thread_allocated_bytes;
+    uint64_t heap_bytes;
+    uint32_t gen0_collections;
+    uint32_t gen2_collections;
+};
+
+/// <summary>
+/// conjure_ray_query::flags and the flags of the overlap entries, as bits: NONE (0) skips trigger volumes and
+/// hits static bodies; INCLUDE_TRIGGERS (1) also hits trigger volumes, EXCLUDE_STATIC (2) skips static bodies.
+/// The values are ABI, pinned by the static_asserts of the layout pins below; a new bit is appended with an
+/// explicit value of its own.
+/// </summary>
+enum class conjure_query_flags : uint32_t {
+    NONE = 0,
+    INCLUDE_TRIGGERS = 1 << 0,
+    EXCLUDE_STATIC = 1 << 1
+};
+CONJURE_ENUM_FLAGS(conjure_query_flags);
+
+/// <summary>
+/// conjure_spawn_desc::flags, as bits: NONE (0) makes bare entities, as entity_create does; SCENE_ENTITIES (1)
+/// makes scene entities under conjure_spawn_desc::parent, as entity_create_many does. The values are ABI,
+/// pinned by the static_asserts of the layout pins below; a new bit is appended with an explicit value of its own.
+/// </summary>
+enum class conjure_spawn_flags : uint32_t {
+    NONE = 0,
+    SCENE_ENTITIES = 1 << 0
+};
+CONJURE_ENUM_FLAGS(conjure_spawn_flags);
 
 enum class conjure_force_mode : uint8_t {
     FORCE,
@@ -324,7 +417,12 @@ struct conjure_native_api {
 };
 
 /// <summary>
-/// Functions managed provides to native, filled by Conjure.Interop.NativeBridge.Initialize.
+/// Functions managed provides to native, filled by Conjure.Interop.NativeBridge.Initialize. sample_memory fills
+/// a conjure_managed_memory and returns 0 (a negative status when it cannot). set_active(slots, count, active)
+/// tells the instances in 'slots' that their entity became active (1) or inactive (0) and returns how many of
+/// them changed state; a free slot is skipped. Not yet carried out end to end: script_runtime never calls
+/// set_active, and Conjure.Managed accepts the call and returns 0 without tracking activity; the null host
+/// tracks it for tests.
 /// </summary>
 struct conjure_managed_api {
     uint32_t size = 0;
@@ -340,6 +438,8 @@ struct conjure_managed_api {
     int32_t (*collect_fields)(int32_t slot, uint8_t *buffer, int32_t capacity) = nullptr;
     int32_t (*collect_garbage)(void) = nullptr;
     int32_t (*shutdown)(void) = nullptr;
+    int32_t (*sample_memory)(conjure_managed_memory *out) = nullptr;
+    int32_t (*set_active)(const int32_t *slots, int32_t count, int32_t active) = nullptr;
 };
 
 /*===========================================================================*/
@@ -358,10 +458,14 @@ static_assert(sizeof(conjure_transform) == 40);
 static_assert(sizeof(conjure_uuid) == 16);
 static_assert(sizeof(conjure_gamepad_state) == 40);
 static_assert(sizeof(conjure_input_block) == 392);
-static_assert(sizeof(conjure_frame_block) == 448);
+static_assert(sizeof(conjure_frame_block) == 512);
 static_assert(alignof(conjure_frame_block) == 64);
 static_assert(offsetof(conjure_frame_block, frame_index) == 32);
 static_assert(offsetof(conjure_frame_block, input) == 48);
+static_assert(offsetof(conjure_frame_block, screen_width) == 440);
+static_assert(offsetof(conjure_frame_block, content_scale_x) == 448);
+static_assert(offsetof(conjure_frame_block, ui_scale) == 456);
+static_assert(offsetof(conjure_frame_block, window_state) == 460);
 static_assert(sizeof(conjure_create_request) == 40);
 static_assert(sizeof(conjure_collision_record) == 48);
 static_assert(sizeof(conjure_script_class_desc) == 24);
@@ -369,12 +473,26 @@ static_assert(sizeof(conjure_script_field_desc) == 56);
 static_assert(sizeof(conjure_managed_component_desc) == 56);
 static_assert(sizeof(conjure_chunk_view) == 80);
 static_assert(sizeof(conjure_query_scope) == 16);
-static_assert(sizeof(conjure_ray_query) == 40);
-static_assert(sizeof(conjure_shape_query) == 80);
-static_assert(sizeof(conjure_raycast_hit) == 40);
+static_assert(sizeof(conjure_ray_query) == 48);
+static_assert(offsetof(conjure_ray_query, flags) == 40);
+static_assert(sizeof(conjure_shape_query) == 88);
+static_assert(offsetof(conjure_shape_query, rotation) == 68);
+static_assert(sizeof(conjure_raycast_hit) == 48);
+static_assert(offsetof(conjure_raycast_hit, is_trigger) == 40);
 static_assert(sizeof(conjure_asset_info) == 16);
 static_assert(sizeof(conjure_module_record) == 20);
-static_assert(sizeof(conjure_frame_stats_block) == 64);
+static_assert(sizeof(conjure_frame_stats_block) == 88);
+static_assert(offsetof(conjure_frame_stats_block, managed_allocated_bytes) == 64);
+static_assert(sizeof(conjure_spawn_component) == 16);
+static_assert(sizeof(conjure_spawn_desc) == 32);
+static_assert(offsetof(conjure_spawn_desc, parent) == 16);
+static_assert(sizeof(conjure_managed_memory) == 24);
+static_assert(sizeof(conjure_query_flags) == 4);
+static_assert(static_cast<uint32_t>(conjure_query_flags::INCLUDE_TRIGGERS) == 1, "query flag bits are ABI");
+static_assert(static_cast<uint32_t>(conjure_query_flags::EXCLUDE_STATIC) == 2, "query flag bits are ABI");
+static_assert(sizeof(conjure_spawn_flags) == 4);
+static_assert(static_cast<uint32_t>(conjure_spawn_flags::SCENE_ENTITIES) == 1, "spawn flag bits are ABI");
+static_assert(sizeof(conjure_managed_api) == 16 + 12 * sizeof(void *), "the managed table holds 12 functions");
 static_assert(offsetof(conjure_native_api, frame) == 16);
 static_assert(offsetof(conjure_native_api, log_write) == 24, "the function table starts right after the header");
 static_assert(
@@ -460,9 +578,31 @@ namespace conjure::scripting {
     inline constexpr uint8_t CREATE_FLAG_ALREADY_CREATED = 2;
 
     /// <summary>
-    /// Column slots of a conjure_chunk_view.
+    /// conjure_create_request::flags bit: the entity is inactive (it or an ancestor is disabled) when the instance
+    /// is created, so the instance starts inactive; conjure_managed_api::set_active reports later changes. Only
+    /// the null host honours it so far: script_runtime never sets it, and Conjure.Managed ignores it.
+    /// </summary>
+    inline constexpr uint8_t CREATE_FLAG_INACTIVE = 4;
+
+    /// <summary>
+    /// Column slots of a conjure_chunk_view, and the most component ids a query_begin exclusion list holds.
     /// </summary>
     inline constexpr int32_t QUERY_MAX_COMPONENTS = 8;
+
+    /// <summary>
+    /// conjure_frame_block::window_state bit: the window has the input focus.
+    /// </summary>
+    inline constexpr uint8_t FRAME_WINDOW_FOCUSED = 1;
+
+    /// <summary>
+    /// conjure_frame_block::window_state bit: the window is minimised (the screen is then 0 x 0).
+    /// </summary>
+    inline constexpr uint8_t FRAME_WINDOW_MINIMISED = 2;
+
+    /// <summary>
+    /// conjure_frame_block::window_state bit: the window is (borderless) fullscreen.
+    /// </summary>
+    inline constexpr uint8_t FRAME_WINDOW_FULLSCREEN = 4;
 
     /// <summary>
     /// Entries in the table, core and bindings together.

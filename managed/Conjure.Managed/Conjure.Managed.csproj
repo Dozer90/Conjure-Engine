@@ -53,6 +53,7 @@
     <Compile Include="Api/Dod/ChunkView.cs" />
     <Compile Include="Api/Dod/ComponentQuery.cs" />
     <Compile Include="Api/Dod/ComponentType.cs" />
+    <Compile Include="Api/Dod/QueryExclude.cs" />
     <Compile Include="Interop/AssetRefBinder.cs" />
     <Compile Include="Interop/BindingStatus.g.cs" />
     <Compile Include="Interop/ConjureNativeException.cs" />
@@ -76,5 +77,10 @@
     <Compile Include="Api/Components/Audio/AudioMirrors.cs" />
     <Compile Include="Api/Components/Physics/PhysicsMirrors.cs" />
     <Compile Include="Api/Components/Scene/SceneMirrors.cs" />
+    <Compile Include="Api/Components/Renderer/RendererMirrors.cs" />
+    <Compile Include="Api/Camera.cs" />
+    <Compile Include="Api/Entity.Spawn.cs" />
+    <Compile Include="Api/Ray.cs" />
+    <Compile Include="Api/Screen.cs" />
   </ItemGroup>
 </Project>

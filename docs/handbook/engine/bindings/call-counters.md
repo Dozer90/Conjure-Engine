@@ -101,7 +101,7 @@ The forwarding function installed over an entry&#x27;s slot (B6): one unique ins
 <div class="function-declaration" id="function-is-bindings-owned-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">constexpr</span> <span class="k">bool</span> is_bindings_owned(
     <a href="call-counters.html#symbol-native-function-id">native_function_id</a> id) <span class="k">noexcept</span>;</code></pre></div>
 
-<p>True when the entry belongs to one of the ten bindings groups (everything after the marker).</p>
+<p>True when the entry belongs to one of the eleven bindings groups (everything after the marker).</p>
 
 #### `native_entry_descriptor_of` {#function-native-entry-descriptor-of}
 

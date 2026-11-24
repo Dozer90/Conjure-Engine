@@ -2,13 +2,17 @@
 
 #include "conjure/testing/approx.h"
 #include "conjure/testing/log_capture.h"
+#include "conjure/testing/test_environment.h"
 #include "bindings_test_support.h"
 
 #include "conjure/bindings/bindings_error.h"
 #include "conjure/bindings/marshal.h"
 #include "conjure/core/error.h"
 #include "conjure/core/hash.h"
+#include "conjure/core/json/document.h"
+#include "conjure/core/json/value.h"
 #include "conjure/core/math/math.h"
+#include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
 #include "conjure/physics/character_controller.h"
 #include "conjure/physics/components.h"
@@ -16,16 +20,21 @@
 #include "conjure/physics/physics_layers.h"
 #include "conjure/physics/physics_world.h"
 #include "conjure/scene/components.h"
+#include "conjure/scene/scene.h"
+#include "conjure/scene/scene_manager.h"
+#include "conjure/scripting/script_component.h"
 
 #include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <vector>
 
-// physics_* (docs/design/15_bindings.md 10, 14_physics.md 8): queries, velocities, forces, kinematic moves,
-// teleport, sleep, gravity, layers and characters over a headless Jolt world; everything NOT_SUPPORTED
-// through the stubs when no physics world is present.
+// physics_* (docs/design/15_bindings.md 10, 14_physics.md 8): queries (with the conjure_query_flags of wave 3
+// GAP-CSHARP 2.4 and the C# overloads that pass them), velocities, forces, kinematic moves, teleport, sleep,
+// gravity, layers and characters over a headless Jolt world; everything NOT_SUPPORTED through the stubs when no
+// physics world is present.
 
 using namespace conjure;
 using namespace conjure::bindings;
@@ -35,6 +44,7 @@ using namespace bindings_test;
 namespace {
 
     constexpr f32 STEP = 1.0f / 60.0f;
+    constexpr std::string_view QUERY_FLAGS_PROBE = "Conjure.TestScripts.QueryFlagsProbe";
 
     struct physics_fixture {
         bare_fixture base;
@@ -69,6 +79,20 @@ namespace {
             CONJURE_REQUIRE_OK(base.world.add<physics::rigid_body>(entity, body));
             physics::box_collider collider = {};
             collider.halfExtents = halfExtents;
+            CONJURE_REQUIRE_OK(base.world.add<physics::box_collider>(entity, collider));
+            return entity;
+        }
+
+        /// <summary>
+        /// A static trigger volume (a box sensor) of half extent 0.5 m.
+        /// </summary>
+        [[nodiscard]] ecs::entity spawn_trigger(const math::vec3 &position) {
+            const ecs::entity entity = create_at(position);
+            physics::rigid_body body = {};
+            body.motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(base.world.add<physics::rigid_body>(entity, body));
+            physics::box_collider collider = {};
+            collider.isTrigger = true;
             CONJURE_REQUIRE_OK(base.world.add<physics::box_collider>(entity, collider));
             return entity;
         }
@@ -161,7 +185,7 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(wide[2].distance > wide[1].distance);
         std::vector<uint64_t> overlaps(1500);
         const conjure_vec3 origin = marshal::from_vec3(math::vec3(0.0f, 3.0f, 0.0f));
-        CHECK(api.physics_overlap_sphere(&origin, 0.6f, 0xFFFFFFFFu, overlaps.data(), 1500) >= 1);
+        CHECK(api.physics_overlap_sphere(&origin, 0.6f, 0xFFFFFFFFu, 0, 0, overlaps.data(), 1500) >= 1);
         CHECK(overlaps[0] != 0);
         CHECK(api.physics_raycast_all(&query, hits.data(), -1) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.physics_raycast_all(nullptr, hits.data(), 8) == to_status(bindings_error::INVALID_ARGUMENT));
@@ -289,33 +313,291 @@ TEST_SUITE("bindings/physics_bindings") {
         fixture.run_steps(1);
         const conjure_vec3 center = {0.0f, 0.6f, 0.0f};
         std::array<uint64_t, 8> found = {};
-        const int32_t sphereCount = api.physics_overlap_sphere(&center, 0.6f, 0xFFFFFFFFu, found.data(), 8);
+        const int32_t sphereCount = api.physics_overlap_sphere(&center, 0.6f, 0xFFFFFFFFu, 0, 0, found.data(), 8);
         CHECK(sphereCount >= 1);
-        CHECK(api.physics_overlap_sphere(&center, 0.6f, 0xFFFFFFFFu, nullptr, 0) == sphereCount);
+        CHECK(api.physics_overlap_sphere(&center, 0.6f, 0xFFFFFFFFu, 0, 0, nullptr, 0) == sphereCount);
         const conjure_vec3 wide = {2.0f, 0.6f, 0.0f};
         const conjure_vec3 halfExtents = {3.0f, 0.2f, 0.2f};
         const conjure_quat_xyzw identity = {0.0f, 0.0f, 0.0f, 1.0f};
-        const int32_t boxCount = api.physics_overlap_box(&wide, &halfExtents, &identity, 0xFFFFFFFFu, found.data(), 8);
+        const int32_t boxCount =
+          api.physics_overlap_box(&wide, &halfExtents, &identity, 0xFFFFFFFFu, 0, 0, found.data(), 8);
         CHECK(boxCount >= 4);
         std::array<uint64_t, 2> small = {};
-        CHECK(api.physics_overlap_box(&wide, &halfExtents, nullptr, 0xFFFFFFFFu, small.data(), 2) == boxCount);
+        CHECK(api.physics_overlap_box(&wide, &halfExtents, nullptr, 0xFFFFFFFFu, 0, 0, small.data(), 2) == boxCount);
         CHECK(small[1] != 0);
         CHECK(
-          api.physics_overlap_sphere(nullptr, 1.0f, 0xFFFFFFFFu, found.data(), 8)
+          api.physics_overlap_sphere(nullptr, 1.0f, 0xFFFFFFFFu, 0, 0, found.data(), 8)
           == to_status(bindings_error::INVALID_ARGUMENT)
         );
         CHECK(
-          api.physics_overlap_sphere(&center, -1.0f, 0xFFFFFFFFu, found.data(), 8)
+          api.physics_overlap_sphere(&center, -1.0f, 0xFFFFFFFFu, 0, 0, found.data(), 8)
           == to_status(bindings_error::INVALID_ARGUMENT)
         );
         CHECK(
-          api.physics_overlap_box(&wide, nullptr, &identity, 0xFFFFFFFFu, found.data(), 8)
+          api.physics_overlap_box(&wide, nullptr, &identity, 0xFFFFFFFFu, 0, 0, found.data(), 8)
           == to_status(bindings_error::INVALID_ARGUMENT)
         );
         CHECK(
-          api.physics_overlap_box(&wide, &halfExtents, &identity, 0xFFFFFFFFu, found.data(), -1)
+          api.physics_overlap_box(&wide, &halfExtents, &identity, 0xFFFFFFFFu, 0, 0, found.data(), -1)
           == to_status(bindings_error::INVALID_ARGUMENT)
         );
+    }
+
+    TEST_CASE("regression - code sweep W3-CS-L1 a query with INCLUDE_TRIGGERS hits a trigger volume") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity ground = fixture.spawn_ground();
+        const ecs::entity trigger = fixture.spawn_trigger(math::vec3(0.0f, 3.0f, 0.0f));
+        fixture.run_steps(1);
+        conjure_ray_query query = fixture.down_from(10.0f);
+        query.flags = static_cast<uint32_t>(conjure_query_flags::INCLUDE_TRIGGERS);
+        conjure_raycast_hit hit = {};
+        REQUIRE(api.physics_raycast(&query, &hit) == 1);
+        CHECK(hit.entity == trigger.to_u64());
+        CHECK(hit.is_trigger == 1);
+
+        std::array<conjure_raycast_hit, 4> hits = {};
+        REQUIRE(api.physics_raycast_all(&query, hits.data(), 4) == 2);
+        CHECK(hits[0].entity == trigger.to_u64());
+        CHECK(hits[0].is_trigger == 1);
+        CHECK(hits[1].entity == ground.to_u64());
+        CHECK(hits[1].is_trigger == 0);
+
+        const conjure_vec3 center = marshal::from_vec3(math::vec3(0.0f, 3.0f, 0.0f));
+        std::array<uint64_t, 4> found = {};
+        const uint32_t includeTriggers = static_cast<uint32_t>(conjure_query_flags::INCLUDE_TRIGGERS);
+        CHECK(api.physics_overlap_sphere(&center, 0.2f, 0xFFFFFFFFu, includeTriggers, 0, found.data(), 4) == 1);
+        CHECK(found[0] == trigger.to_u64());
+        const conjure_vec3 halfExtents = {0.2f, 0.2f, 0.2f};
+        found = {};
+        CHECK(
+          api.physics_overlap_box(&center, &halfExtents, nullptr, 0xFFFFFFFFu, includeTriggers, 0, found.data(), 4)
+          == 1
+        );
+        CHECK(found[0] == trigger.to_u64());
+    }
+
+    TEST_CASE("physics - a query without flags skips a trigger volume and reports no trigger") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity ground = fixture.spawn_ground();
+        static_cast<void>(fixture.spawn_trigger(math::vec3(0.0f, 3.0f, 0.0f)));
+        fixture.run_steps(1);
+        const conjure_ray_query query = fixture.down_from(10.0f);
+        conjure_raycast_hit hit = {};
+        hit.is_trigger = 7;                                     // the entry writes the whole record
+        REQUIRE(api.physics_raycast(&query, &hit) == 1);
+        CHECK(hit.entity == ground.to_u64());
+        CHECK(hit.is_trigger == 0);
+        std::array<conjure_raycast_hit, 4> hits = {};
+        CHECK(api.physics_raycast_all(&query, hits.data(), 4) == 1);
+
+        conjure_shape_query cast = {};
+        cast.ray = query;
+        cast.shape = static_cast<uint8_t>(conjure_cast_shape::SPHERE);
+        cast.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        cast.radius = 0.25f;
+        REQUIRE(api.physics_shape_cast(&cast, &hit) == 1);
+        CHECK(hit.entity == ground.to_u64());
+
+        const conjure_vec3 center = marshal::from_vec3(math::vec3(0.0f, 3.0f, 0.0f));
+        const conjure_vec3 halfExtents = {0.2f, 0.2f, 0.2f};
+        std::array<uint64_t, 4> found = {};
+        CHECK(api.physics_overlap_sphere(&center, 0.2f, 0xFFFFFFFFu, 0, 0, found.data(), 4) == 0);
+        CHECK(api.physics_overlap_box(&center, &halfExtents, nullptr, 0xFFFFFFFFu, 0, 0, found.data(), 4) == 0);
+    }
+
+    TEST_CASE("physics - shape_cast with INCLUDE_TRIGGERS reports is_trigger") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity ground = fixture.spawn_ground();
+        const ecs::entity trigger = fixture.spawn_trigger(math::vec3(0.0f, 3.0f, 0.0f));
+        fixture.run_steps(1);
+        conjure_shape_query cast = {};
+        cast.ray = fixture.down_from(10.0f);
+        cast.ray.flags = static_cast<uint32_t>(conjure_query_flags::INCLUDE_TRIGGERS);
+        cast.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        cast.radius = 0.25f;
+        cast.half_extents = {0.25f, 0.25f, 0.25f};
+        constexpr std::array<conjure_cast_shape, 3> SHAPES = {
+          conjure_cast_shape::SPHERE, conjure_cast_shape::BOX, conjure_cast_shape::CAPSULE
+        };
+        for (const conjure_cast_shape shape : SHAPES) {
+            CAPTURE(static_cast<int>(shape));
+            cast.shape = static_cast<uint8_t>(shape);
+            conjure_raycast_hit hit = {};
+            REQUIRE(api.physics_shape_cast(&cast, &hit) == 1);
+            CHECK(hit.entity == trigger.to_u64());
+            CHECK(hit.is_trigger == 1);
+        }
+
+        // Below the trigger only the ground is left, which is no trigger.
+        cast.ray.origin = {0.0f, 1.0f, 0.0f};
+        cast.shape = static_cast<uint8_t>(conjure_cast_shape::SPHERE);
+        conjure_raycast_hit hit = {};
+        REQUIRE(api.physics_shape_cast(&cast, &hit) == 1);
+        CHECK(hit.entity == ground.to_u64());
+        CHECK(hit.is_trigger == 0);
+    }
+
+    TEST_CASE("physics - EXCLUDE_STATIC skips static bodies in every query") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity ground = fixture.spawn_ground();
+        const ecs::entity mover = fixture.spawn_box(math::vec3(4.0f, 3.0f, 0.0f), physics::motion_type::KINEMATIC);
+        fixture.run_steps(1);
+        const uint32_t excludeStatic = static_cast<uint32_t>(conjure_query_flags::EXCLUDE_STATIC);
+
+        conjure_ray_query query = fixture.down_from(10.0f);
+        conjure_raycast_hit hit = {};
+        REQUIRE(api.physics_raycast(&query, &hit) == 1);
+        CHECK(hit.entity == ground.to_u64());
+        query.flags = excludeStatic;
+        CHECK(api.physics_raycast(&query, &hit) == 0);
+        std::array<conjure_raycast_hit, 4> hits = {};
+        CHECK(api.physics_raycast_all(&query, hits.data(), 4) == 0);
+        conjure_shape_query cast = {};
+        cast.ray = query;
+        cast.shape = static_cast<uint8_t>(conjure_cast_shape::SPHERE);
+        cast.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        cast.radius = 0.25f;
+        CHECK(api.physics_shape_cast(&cast, &hit) == 0);
+
+        // Above the kinematic box the ray still hits it.
+        query.origin = {4.0f, 10.0f, 0.0f};
+        REQUIRE(api.physics_raycast(&query, &hit) == 1);
+        CHECK(hit.entity == mover.to_u64());
+
+        const conjure_vec3 onGround = {0.0f, 0.0f, 0.0f};
+        const conjure_vec3 onMover = {4.0f, 3.0f, 0.0f};
+        const conjure_vec3 halfExtents = {0.2f, 0.2f, 0.2f};
+        std::array<uint64_t, 4> found = {};
+        CHECK(api.physics_overlap_sphere(&onGround, 0.2f, 0xFFFFFFFFu, 0, 0, found.data(), 4) == 1);
+        CHECK(api.physics_overlap_sphere(&onGround, 0.2f, 0xFFFFFFFFu, excludeStatic, 0, found.data(), 4) == 0);
+        CHECK(
+          api.physics_overlap_box(&onGround, &halfExtents, nullptr, 0xFFFFFFFFu, excludeStatic, 0, found.data(), 4)
+          == 0
+        );
+        CHECK(api.physics_overlap_sphere(&onMover, 0.2f, 0xFFFFFFFFu, excludeStatic, 0, found.data(), 4) == 1);
+        CHECK(found[0] == mover.to_u64());
+    }
+
+    TEST_CASE("physics - the overlap entries leave the ignored entity out") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity left = fixture.spawn_box(math::vec3(-0.4f, 3.0f, 0.0f), physics::motion_type::KINEMATIC);
+        const ecs::entity right = fixture.spawn_box(math::vec3(0.4f, 3.0f, 0.0f), physics::motion_type::KINEMATIC);
+        fixture.run_steps(1);
+        const conjure_vec3 center = {0.0f, 3.0f, 0.0f};
+        const conjure_vec3 halfExtents = {0.2f, 0.2f, 0.2f};
+        std::array<uint64_t, 4> found = {};
+        CHECK(api.physics_overlap_sphere(&center, 0.2f, 0xFFFFFFFFu, 0, 0, found.data(), 4) == 2);
+        found = {};
+        CHECK(api.physics_overlap_sphere(&center, 0.2f, 0xFFFFFFFFu, 0, left.to_u64(), found.data(), 4) == 1);
+        CHECK(found[0] == right.to_u64());
+        found = {};
+        CHECK(
+          api.physics_overlap_box(&center, &halfExtents, nullptr, 0xFFFFFFFFu, 0, right.to_u64(), found.data(), 4)
+          == 1
+        );
+        CHECK(found[0] == left.to_u64());
+        // An ignored entity that is not alive changes nothing.
+        CHECK(api.physics_overlap_sphere(&center, 0.2f, 0xFFFFFFFFu, 0, 0xFFFFFFFFFFull, found.data(), 4) == 2);
+    }
+
+    TEST_CASE("physics - an unknown query flag bit is INVALID_ARGUMENT in every query") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        static_cast<void>(fixture.spawn_ground());
+        fixture.run_steps(1);
+        constexpr std::array<uint32_t, 3> UNKNOWN = {4u, 0x80000000u, 4u | 1u};
+        for (usize index = 0; index < UNKNOWN.size(); ++index) {
+            CAPTURE(index);
+            clear_last_error();
+            conjure_ray_query query = fixture.down_from(10.0f);
+            query.flags = UNKNOWN[index];
+            conjure_raycast_hit hit = {};
+            std::array<conjure_raycast_hit, 4> hits = {};
+            CHECK(api.physics_raycast(&query, &hit) == to_status(bindings_error::INVALID_ARGUMENT));
+            CHECK(last_error_message() == "physics_raycast: flags");
+            CHECK(api.physics_raycast_all(&query, hits.data(), 4) == to_status(bindings_error::INVALID_ARGUMENT));
+            conjure_shape_query cast = {};
+            cast.ray = query;
+            cast.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+            cast.radius = 0.25f;
+            CHECK(api.physics_shape_cast(&cast, &hit) == to_status(bindings_error::INVALID_ARGUMENT));
+            const conjure_vec3 center = {0.0f, 0.0f, 0.0f};
+            const conjure_vec3 halfExtents = {0.2f, 0.2f, 0.2f};
+            std::array<uint64_t, 4> found = {};
+            CHECK(
+              api.physics_overlap_sphere(&center, 0.2f, 0xFFFFFFFFu, UNKNOWN[index], 0, found.data(), 4)
+              == to_status(bindings_error::INVALID_ARGUMENT)
+            );
+            CHECK(
+              api.physics_overlap_box(&center, &halfExtents, nullptr, 0xFFFFFFFFu, UNKNOWN[index], 0, found.data(), 4)
+              == to_status(bindings_error::INVALID_ARGUMENT)
+            );
+            CHECK(last_error_message() == "physics_overlap_box: flags");
+        }
+        clear_last_error();
+    }
+
+    TEST_CASE(
+      "physics - the C# overloads without QueryFlags skip triggers, the ones with it reach them [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_app fixture = {};
+        scene::scene &active = fixture.app().context().scenes->active();
+        ecs::world &world = *fixture.app().context().world;
+
+        const auto spawn = [&](
+          std::string_view name,
+          const math::vec3 &position,
+          const math::vec3 &halfExtents,
+          bool trigger
+        ) {
+            const core::result<ecs::entity> created = active.create_entity(core::string_id(name));
+            REQUIRE(created.has_value());
+            scene::local_transform local = {};
+            local.position = position;
+            CONJURE_REQUIRE_OK(active.set_local_transform(created.value(), local));
+            physics::rigid_body body = {};
+            body.motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(world.add<physics::rigid_body>(created.value(), body));
+            physics::box_collider collider = {};
+            collider.halfExtents = halfExtents;
+            collider.isTrigger = trigger;
+            CONJURE_REQUIRE_OK(world.add<physics::box_collider>(created.value(), collider));
+            return created.value();
+        };
+        const ecs::entity ground =
+          spawn("ground", math::vec3(0.0f, -0.5f, 0.0f), math::vec3(50.0f, 0.5f, 50.0f), false);
+        const ecs::entity trigger = spawn("trigger", math::vec3(0.0f, 3.0f, 0.0f), math::vec3(0.5f), true);
+        CONJURE_REQUIRE_OK(fixture.app().step_frame());
+
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), QUERY_FLAGS_PROBE);
+        core::result<core::json::document> collected = fixture.runtime().collect_entry_fields(probe);
+        REQUIRE(collected.has_value());
+        const core::json::value fields = collected.value().root();
+        CHECK(fields["Ran"].as_i64() == 1);
+        CHECK(static_cast<u64>(fields["DefaultHit"].as_i64()) == ground.to_u64());
+        CHECK(fields["DefaultHitIsTrigger"].as_i64() == 0);
+        CHECK(static_cast<u64>(fields["TriggerHit"].as_i64()) == trigger.to_u64());
+        CHECK(fields["TriggerHitIsTrigger"].as_i64() == 1);
+        CHECK(fields["DefaultCastHitIsTrigger"].as_i64() == 0);
+        CHECK(fields["TriggerCastHitIsTrigger"].as_i64() == 1);
+        CHECK(fields["DefaultOverlaps"].as_i64() == 0);
+        CHECK(fields["TriggerOverlaps"].as_i64() == 1);
+        CHECK(fields["IgnoredOverlaps"].as_i64() == 0);
+        CHECK(fields["DefaultBoxOverlaps"].as_i64() == 0);
+        CHECK(fields["TriggerBoxOverlaps"].as_i64() == 1);
+        CHECK(fields["IgnoredBoxOverlaps"].as_i64() == 0);
+        CHECK(fields["StaticExcludedOverlaps"].as_i64() == 0);
+        CHECK(fields["UnknownFlagThrows"].as_string() == "ArgumentException");
+        fixture.shutdown();
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("physics - velocity set and get after a step") {

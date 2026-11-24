@@ -18,10 +18,11 @@
 
 // The C++ fake of the managed side (docs/design/03_scripting.md D13, 7). It implements conjure_managed_api
 // with recording functions: slots come from a LIFO free list, apply_fields stores the blob per slot and
-// collect_fields echoes it, run_phase and dispatch_collisions are logged, load_game_assembly registers
-// fake classes (add_fake_class and an optional <assembly>.classes.json fixture) through the native table
-// so the registry, blob and reload paths all run without .NET. Every scripting, scene, engine and editor
-// test uses it; one null host is active (initialised) at a time.
+// collect_fields echoes it, run_phase, dispatch_collisions and set_active are logged, sample_memory reports
+// the figures set_managed_memory gave it, load_game_assembly registers fake classes (add_fake_class and an
+// optional <assembly>.classes.json fixture) through the native table so the registry, blob and reload paths
+// all run without .NET. Every scripting, scene, engine and editor test uses it; one null host is active
+// (initialised) at a time.
 
 namespace conjure::scripting {
 
@@ -69,6 +70,15 @@ namespace conjure::scripting {
                 std::vector<u8> blob = {};
             };
 
+            /// <summary>
+            /// One slot of a set_active call: the state asked for and whether the slot was live and changed.
+            /// </summary>
+            struct activity_record {
+                i32 slot = -1;
+                bool active = true;
+                bool changed = false;
+            };
+
         private:
             std::vector<std::string> mCalls = {};
             std::vector<create_record> mCreates = {};
@@ -76,11 +86,13 @@ namespace conjure::scripting {
             std::vector<phase_record> mPhases = {};
             std::vector<collision_record> mCollisions = {};
             std::vector<apply_record> mApplies = {};
+            std::vector<activity_record> mActivities = {};
             std::vector<std::string> mLoadedAssemblies = {};
             u32 mUnloadCount = 0;
             u32 mCollectGarbageCount = 0;
             u32 mShutdownCount = 0;
             u32 mCollectFieldsCount = 0;
+            u64 mSampleMemoryCount = 0;
             u64 mDroppedCount = 0;
             bool mEnabled = true;
 
@@ -120,6 +132,13 @@ namespace conjure::scripting {
             }
 
             /// <summary>
+            /// Every slot of every set_active call, in call order.
+            /// </summary>
+            [[nodiscard]] const std::vector<activity_record> &activities() const noexcept {
+                return mActivities;
+            }
+
+            /// <summary>
             /// Paths handed to load_game_assembly, in order.
             /// </summary>
             [[nodiscard]] const std::vector<std::string> &loaded_assemblies() const noexcept {
@@ -140,6 +159,14 @@ namespace conjure::scripting {
 
             [[nodiscard]] u32 collect_fields_count() const noexcept {
                 return mCollectFieldsCount;
+            }
+
+            /// <summary>
+            /// sample_memory calls. The engine samples once per frame, so these calls are counted here only and
+            /// never appear in calls().
+            /// </summary>
+            [[nodiscard]] u64 sample_memory_count() const noexcept {
+                return mSampleMemoryCount;
             }
 
             /// <summary>
@@ -182,11 +209,13 @@ namespace conjure::scripting {
             void record_phase(const phase_record &record);
             void record_collision(const collision_record &record);
             void record_apply(const apply_record &record);
+            void record_activity(const activity_record &record);
             void record_load(std::string path);
             void record_unload();
             void record_collect_garbage();
             void record_shutdown();
             void record_collect_fields();
+            void record_sample_memory();
 
         private:
             /// <summary>
@@ -220,12 +249,19 @@ namespace conjure::scripting {
             /// </summary>
             using collision_hook = std::function<void(const conjure_collision_record &record)>;
 
+            /// <summary>
+            /// Runs inside set_active for every live slot whose state changed, after the change: what OnEnable
+            /// (active) or OnDisable (inactive) would do.
+            /// </summary>
+            using activity_hook = std::function<void(i32 slot, bool active)>;
+
         private:
             struct slot_state {
                 bool live = false;
                 u64 entity = 0;
                 u64 classHash = 0;
                 bool started = false;
+                bool active = true;
                 std::vector<u8> fields = {};
                 std::optional<std::vector<u8>> collectOverride = std::nullopt;
                 std::array<u32, 3> phaseCounts = {};
@@ -239,14 +275,17 @@ namespace conjure::scripting {
             std::vector<i32> mFreeList = {};               // LIFO
             std::vector<script_class_info> mFakeClasses = {};
             std::string mLoadedAssembly = {};
+            conjure_managed_memory mManagedMemory = {};
             i32 mLoadResult = 0;
             i32 mUnloadResult = 0;
+            i32 mSampleMemoryResult = 0;
             bool mAssemblyLoaded = false;
             create_hook mCreateHook = {};
             create_hook mReloadHook = {};
             destroy_hook mDestroyHook = {};
             phase_hook mPhaseHook = {};
             collision_hook mCollisionHook = {};
+            activity_hook mActivityHook = {};
 
         public:
             null_script_host();
@@ -306,6 +345,19 @@ namespace conjure::scripting {
             void set_collect_override(i32 slot, std::vector<u8> blob);
 
             /// <summary>
+            /// The counters sample_memory reports from now on (all 0 until set), standing in for the CLR's.
+            /// Like the CLR's, every field but heap_bytes should only grow while the host lives; a test models a
+            /// host restart by setting smaller values.
+            /// </summary>
+            void set_managed_memory(const conjure_managed_memory &memory) noexcept;
+
+            /// <summary>
+            /// The value sample_memory returns (0 = success and 'out' filled; a negative scripting status models
+            /// a failed sample and leaves 'out' untouched).
+            /// </summary>
+            void set_sample_memory_result(i32 result) noexcept;
+
+            /// <summary>
             /// Callbacks standing in for managed script code (empty = none). They run on the main thread
             /// inside the managed_api call and may call back into the runtime like a script would: add
             /// scripts, destroy entities, open query scopes through the native table.
@@ -315,6 +367,7 @@ namespace conjure::scripting {
             void set_destroy_hook(destroy_hook hook);
             void set_phase_hook(phase_hook hook);
             void set_collision_hook(collision_hook hook);
+            void set_activity_hook(activity_hook hook);
 
             /// <summary>
             /// True when the slot is live and either took part in a FIXED_UPDATE or UPDATE run_phase (the
@@ -325,6 +378,12 @@ namespace conjure::scripting {
             [[nodiscard]] bool is_slot_started(i32 slot) const noexcept;
 
             [[nodiscard]] bool is_slot_live(i32 slot) const noexcept;
+
+            /// <summary>
+            /// True when the slot is live and active: a slot starts active unless its create request carried
+            /// CREATE_FLAG_INACTIVE, and set_active changes it. This is what the managed side keeps per instance.
+            /// </summary>
+            [[nodiscard]] bool is_slot_active(i32 slot) const noexcept;
 
             /// <summary>
             /// Entity recorded for a live slot (0 otherwise).
@@ -402,6 +461,8 @@ namespace conjure::scripting {
             [[nodiscard]] i32 collect_fields(i32 slot, u8 *buffer, i32 capacity);
             [[nodiscard]] i32 collect_garbage();
             [[nodiscard]] i32 shutdown_managed();
+            [[nodiscard]] i32 sample_memory(conjure_managed_memory *out);
+            [[nodiscard]] i32 set_active(const i32 *slots, i32 count, i32 active);
 
             void register_classes_with_native(const std::vector<script_class_info> &classes);
             [[nodiscard]] i32 allocate_slot();
@@ -417,5 +478,7 @@ namespace conjure::scripting {
             static i32 trampoline_collect_fields(i32 slot, u8 *buffer, i32 capacity);
             static i32 trampoline_collect_garbage();
             static i32 trampoline_shutdown();
+            static i32 trampoline_sample_memory(conjure_managed_memory *out);
+            static i32 trampoline_set_active(const i32 *slots, i32 count, i32 active);
     };
 }

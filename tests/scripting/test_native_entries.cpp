@@ -80,7 +80,7 @@ namespace {
         bool opened = false;
         fixture.null_host().set_phase_hook([&fixture, &ids, &body, &opened](script_phase, f32) {
             conjure_query_scope scope = {};
-            opened = fixture.api().query_begin(ids.data(), 1, &scope) == 0;
+            opened = fixture.api().query_begin(ids.data(), 1, nullptr, 0, &scope) == 0;
             if (!opened) {
                 return;
             }
@@ -311,9 +311,9 @@ TEST_SUITE("scripting/native_entries") {
 
         // Outside a phase the scope is refused (as managed Begin would be told).
         conjure_query_scope scope = {};
-        CHECK(api.query_begin(ids.data(), 2, &scope) == status_of(scripting_error::NOT_IN_PHASE));
-        CHECK(api.query_begin(nullptr, 2, &scope) == status_of(scripting_error::NOT_SUPPORTED));
-        CHECK(api.query_begin(ids.data(), 0, &scope) == status_of(scripting_error::NOT_SUPPORTED));
+        CHECK(api.query_begin(ids.data(), 2, nullptr, 0, &scope) == status_of(scripting_error::NOT_IN_PHASE));
+        CHECK(api.query_begin(nullptr, 2, nullptr, 0, &scope) == status_of(scripting_error::NOT_SUPPORTED));
+        CHECK(api.query_begin(ids.data(), 0, nullptr, 0, &scope) == status_of(scripting_error::NOT_SUPPORTED));
         const std::array<u32, 1> zero = {0};
         api.query_end(77);                                              // unknown scopes are ignored
 
@@ -324,8 +324,8 @@ TEST_SUITE("scripting/native_entries") {
         u32 chunks = 0;
         const u64 versionBefore = fixture.world.version();
         fixture.null_host().set_phase_hook([&](script_phase, f32) {
-            CHECK(api.query_begin(zero.data(), 1, &scope) == status_of(scripting_error::NOT_SUPPORTED));
-            REQUIRE(api.query_begin(ids.data(), 1, &scope) == 0);
+            CHECK(api.query_begin(zero.data(), 1, nullptr, 0, &scope) == status_of(scripting_error::NOT_SUPPORTED));
+            REQUIRE(api.query_begin(ids.data(), 1, nullptr, 0, &scope) == 0);
             CHECK(fixture.world.is_locked());
             CHECK(fixture.runtime.open_query_scope_count() == 1);
             REQUIRE(scope.chunks != nullptr);
@@ -375,7 +375,7 @@ TEST_SUITE("scripting/native_entries") {
 
         // A scope left open is force-closed at phase end with a warning naming the phase.
         fixture.null_host().set_phase_hook([&](script_phase, f32) {
-            REQUIRE(api.query_begin(ids.data(), 2, &scope) == 0);
+            REQUIRE(api.query_begin(ids.data(), 2, nullptr, 0, &scope) == 0);
         });
         fixture.runtime.run_phase(script_phase::LATE_UPDATE, 0.1f);
         fixture.null_host().set_phase_hook({});
@@ -619,7 +619,7 @@ TEST_SUITE("scripting/native_entries") {
         CHECK(api.component_set(1, 1, nullptr) == 0);
         conjure_query_scope scope = {};
         const std::array<u32, 1> ids = {1};
-        CHECK(api.query_begin(ids.data(), 1, &scope) == status_of(scripting_error::NOT_INITIALISED));
+        CHECK(api.query_begin(ids.data(), 1, nullptr, 0, &scope) == status_of(scripting_error::NOT_INITIALISED));
         api.query_end(1);
     }
 

@@ -16,9 +16,9 @@ namespace Conjure.Interop;
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct NativeApi
 {
-    public const uint ExpectedVersion = 2;
-    public const ulong ExpectedLayoutHash = 0x967165453AD419E1UL;
-    public const int EntryCount = 127;
+    public const uint ExpectedVersion = 3;
+    public const ulong ExpectedLayoutHash = 0xA9E2B0AC8F1DD13FUL;
+    public const int EntryCount = 132;
     public const int CoreEntryCount = 20;
 
     public uint Size;
@@ -44,7 +44,7 @@ public unsafe struct NativeApi
     public delegate* unmanaged<ulong, uint, int> ComponentRemove;
     public delegate* unmanaged<ulong, uint, void*, int> ComponentGet;
     public delegate* unmanaged<ulong, uint, void*, int> ComponentSet;
-    public delegate* unmanaged<uint*, int, QueryScope*, int> QueryBegin;
+    public delegate* unmanaged<uint*, int, uint*, int, QueryScope*, int> QueryBegin;
     public delegate* unmanaged<uint, void> QueryEnd;
     public delegate* unmanaged<ulong, TransformData*, int> TransformGetLocal;
     public delegate* unmanaged<ulong, TransformData*, int> TransformSetLocal;
@@ -88,8 +88,8 @@ public unsafe struct NativeApi
     public delegate* unmanaged<RayQuery*, RaycastHit*, int> PhysicsRaycast;
     public delegate* unmanaged<RayQuery*, RaycastHit*, int, int> PhysicsRaycastAll;
     public delegate* unmanaged<ShapeQuery*, RaycastHit*, int> PhysicsShapeCast;
-    public delegate* unmanaged<Vector3*, float, uint, ulong*, int, int> PhysicsOverlapSphere;
-    public delegate* unmanaged<Vector3*, Vector3*, Quaternion*, uint, ulong*, int, int> PhysicsOverlapBox;
+    public delegate* unmanaged<Vector3*, float, uint, uint, ulong, ulong*, int, int> PhysicsOverlapSphere;
+    public delegate* unmanaged<Vector3*, Vector3*, Quaternion*, uint, uint, ulong, ulong*, int, int> PhysicsOverlapBox;
     public delegate* unmanaged<ulong, Vector3*, int> PhysicsGetLinearVelocity;
     public delegate* unmanaged<ulong, Vector3*, int> PhysicsSetLinearVelocity;
     public delegate* unmanaged<ulong, Vector3*, int> PhysicsGetAngularVelocity;
@@ -153,6 +153,11 @@ public unsafe struct NativeApi
     public delegate* unmanaged<int, ModuleRecord*, int> ModulesInfo;
     public delegate* unmanaged<int, byte*, int, int> ModulesName;
     public delegate* unmanaged<ulong, byte*, int, int> EntityGetTagText;
+    public delegate* unmanaged<SpawnDesc*, ulong*, int> EntitySpawn;
+    public delegate* unmanaged<ulong> CameraMain;
+    public delegate* unmanaged<ulong, Vector2*, Vector3*, Vector3*, int> CameraScreenRay;
+    public delegate* unmanaged<ulong, Vector3*, Vector3*, int> CameraScreenToWorld;
+    public delegate* unmanaged<ulong, Vector3*, Vector3*, int> CameraWorldToScreen;
 
     /// <summary>
     /// The function pointer of entry 'function' as an untyped pointer (null when native left it unfilled).
@@ -305,6 +310,11 @@ public enum NativeFunction
     ModulesInfo = 124,
     ModulesName = 125,
     EntityGetTagText = 126,
+    EntitySpawn = 127,
+    CameraMain = 128,
+    CameraScreenRay = 129,
+    CameraScreenToWorld = 130,
+    CameraWorldToScreen = 131,
 }
 
 /// <summary>
@@ -442,6 +452,11 @@ public static class NativeFunctionNames
         "modules_info",
         "modules_name",
         "entity_get_tag_text",
+        "entity_spawn",
+        "camera_main",
+        "camera_screen_ray",
+        "camera_screen_to_world",
+        "camera_world_to_screen",
     };
 
     public static string Of(NativeFunction function)

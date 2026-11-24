@@ -10,10 +10,10 @@
 // CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE(X) invokes X("<line>") per record line in header order:
 // compute_native_api_hash() folds them after the entries.
 
-#define CONJURE_NATIVE_API_HASH 0x967165453AD419E1ull
-#define CONJURE_NATIVE_API_ENTRY_COUNT 127
+#define CONJURE_NATIVE_API_HASH 0xA9E2B0AC8F1DD13Full
+#define CONJURE_NATIVE_API_ENTRY_COUNT 132
 #define CONJURE_NATIVE_API_CORE_ENTRY_COUNT 20
-#define CONJURE_NATIVE_API_RECORD_LINE_COUNT 215
+#define CONJURE_NATIVE_API_RECORD_LINE_COUNT 260
 
 // clang-format off
 #define CONJURE_NATIVE_API_FOR_EACH_ENTRY(X) \
@@ -35,7 +35,8 @@
     X(component, remove, "int32_t (uint64_t entity, uint32_t typeId)") \
     X(component, get, "int32_t (uint64_t entity, uint32_t typeId, void *out)") \
     X(component, set, "int32_t (uint64_t entity, uint32_t typeId, const void *data)") \
-    X(query, begin, "int32_t (const uint32_t *ids, int32_t count, conjure_query_scope *out)") \
+    X(query, begin, "int32_t (const uint32_t *ids, int32_t count, const uint32_t *withoutIds, int32_t " \
+      "withoutCount, conjure_query_scope *out)") \
     X(query, end, "void (uint32_t scopeId)") \
     X(transform, get_local, "int32_t (uint64_t entity, conjure_transform *out)") \
     X(transform, set_local, "int32_t (uint64_t entity, const conjure_transform *value)") \
@@ -82,10 +83,11 @@
     X(physics, raycast_all, "int32_t (const conjure_ray_query *query, conjure_raycast_hit *outHits, int32_t " \
       "capacity)") \
     X(physics, shape_cast, "int32_t (const conjure_shape_query *query, conjure_raycast_hit *outHit)") \
-    X(physics, overlap_sphere, "int32_t (const conjure_vec3 *center, float radius, uint32_t layerMask, uint64_t " \
-      "*out, int32_t capacity)") \
+    X(physics, overlap_sphere, "int32_t (const conjure_vec3 *center, float radius, uint32_t layerMask, uint32_t " \
+      "flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity)") \
     X(physics, overlap_box, "int32_t (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const " \
-      "conjure_quat_xyzw *rotation, uint32_t layerMask, uint64_t *out, int32_t capacity)") \
+      "conjure_quat_xyzw *rotation, uint32_t layerMask, uint32_t flags, uint64_t " \
+      "ignoreEntity, uint64_t *out, int32_t capacity)") \
     X(physics, get_linear_velocity, "int32_t (uint64_t entity, conjure_vec3 *out)") \
     X(physics, set_linear_velocity, "int32_t (uint64_t entity, const conjure_vec3 *value)") \
     X(physics, get_angular_velocity, "int32_t (uint64_t entity, conjure_vec3 *out)") \
@@ -154,6 +156,14 @@
     X(modules, info, "int32_t (int32_t index, conjure_module_record *out)") \
     X(modules, name, "int32_t (int32_t index, char *utf8, int32_t capacity)") \
     X(entity, get_tag_text, "int32_t (uint64_t entity, char *utf8, int32_t capacity)") \
+    X(entity, spawn, "int32_t (const conjure_spawn_desc *desc, uint64_t *outEntities)") \
+    X(camera, main, "uint64_t (void)") \
+    X(camera, screen_ray, "int32_t (uint64_t camera, const conjure_vec2 *screenPixels, conjure_vec3 *outOrigin, " \
+      "conjure_vec3 *outDirection)") \
+    X(camera, screen_to_world, "int32_t (uint64_t camera, const conjure_vec3 *screenPixelsAndDepth, conjure_vec3 " \
+      "*outWorld)") \
+    X(camera, world_to_screen, "int32_t (uint64_t camera, const conjure_vec3 *world, conjure_vec3 " \
+      "*outScreenPixelsAndDepth)") \
     /* end of table */
 
 // X(group, name, return, (arguments)) per entry in table order: the typed form the bindings' filtered
@@ -177,7 +187,9 @@
     X(component, remove, int32_t, (uint64_t entity, uint32_t typeId)) \
     X(component, get, int32_t, (uint64_t entity, uint32_t typeId, void *out)) \
     X(component, set, int32_t, (uint64_t entity, uint32_t typeId, const void *data)) \
-    X(query, begin, int32_t, (const uint32_t *ids, int32_t count, conjure_query_scope *out)) \
+    X(query, begin, int32_t, \
+      (const uint32_t *ids, int32_t count, const uint32_t *withoutIds, int32_t withoutCount, \
+      conjure_query_scope *out)) \
     X(query, end, void, (uint32_t scopeId)) \
     X(transform, get_local, int32_t, (uint64_t entity, conjure_transform *out)) \
     X(transform, set_local, int32_t, (uint64_t entity, const conjure_transform *value)) \
@@ -224,10 +236,11 @@
     X(physics, raycast_all, int32_t, (const conjure_ray_query *query, conjure_raycast_hit *outHits, int32_t capacity)) \
     X(physics, shape_cast, int32_t, (const conjure_shape_query *query, conjure_raycast_hit *outHit)) \
     X(physics, overlap_sphere, int32_t, \
-      (const conjure_vec3 *center, float radius, uint32_t layerMask, uint64_t *out, int32_t capacity)) \
+      (const conjure_vec3 *center, float radius, uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, \
+      uint64_t *out, int32_t capacity)) \
     X(physics, overlap_box, int32_t, \
       (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation, \
-      uint32_t layerMask, uint64_t *out, int32_t capacity)) \
+      uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity)) \
     X(physics, get_linear_velocity, int32_t, (uint64_t entity, conjure_vec3 *out)) \
     X(physics, set_linear_velocity, int32_t, (uint64_t entity, const conjure_vec3 *value)) \
     X(physics, get_angular_velocity, int32_t, (uint64_t entity, conjure_vec3 *out)) \
@@ -297,9 +310,17 @@
     X(modules, info, int32_t, (int32_t index, conjure_module_record *out)) \
     X(modules, name, int32_t, (int32_t index, char *utf8, int32_t capacity)) \
     X(entity, get_tag_text, int32_t, (uint64_t entity, char *utf8, int32_t capacity)) \
+    X(entity, spawn, int32_t, (const conjure_spawn_desc *desc, uint64_t *outEntities)) \
+    X(camera, main, uint64_t, (void)) \
+    X(camera, screen_ray, int32_t, \
+      (uint64_t camera, const conjure_vec2 *screenPixels, conjure_vec3 *outOrigin, conjure_vec3 *outDirection)) \
+    X(camera, screen_to_world, int32_t, \
+      (uint64_t camera, const conjure_vec3 *screenPixelsAndDepth, conjure_vec3 *outWorld)) \
+    X(camera, world_to_screen, int32_t, \
+      (uint64_t camera, const conjure_vec3 *world, conjure_vec3 *outScreenPixelsAndDepth)) \
     /* end of table */
 
-// The same for the entries after the bindings marker only (the ten bindings groups, R26/R64).
+// The same for the entries after the bindings marker only (the eleven bindings groups, R26/R64).
 #define CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY(X) \
     X(transform, get_local, int32_t, (uint64_t entity, conjure_transform *out)) \
     X(transform, set_local, int32_t, (uint64_t entity, const conjure_transform *value)) \
@@ -346,10 +367,11 @@
     X(physics, raycast_all, int32_t, (const conjure_ray_query *query, conjure_raycast_hit *outHits, int32_t capacity)) \
     X(physics, shape_cast, int32_t, (const conjure_shape_query *query, conjure_raycast_hit *outHit)) \
     X(physics, overlap_sphere, int32_t, \
-      (const conjure_vec3 *center, float radius, uint32_t layerMask, uint64_t *out, int32_t capacity)) \
+      (const conjure_vec3 *center, float radius, uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, \
+      uint64_t *out, int32_t capacity)) \
     X(physics, overlap_box, int32_t, \
       (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation, \
-      uint32_t layerMask, uint64_t *out, int32_t capacity)) \
+      uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity)) \
     X(physics, get_linear_velocity, int32_t, (uint64_t entity, conjure_vec3 *out)) \
     X(physics, set_linear_velocity, int32_t, (uint64_t entity, const conjure_vec3 *value)) \
     X(physics, get_angular_velocity, int32_t, (uint64_t entity, conjure_vec3 *out)) \
@@ -419,6 +441,14 @@
     X(modules, info, int32_t, (int32_t index, conjure_module_record *out)) \
     X(modules, name, int32_t, (int32_t index, char *utf8, int32_t capacity)) \
     X(entity, get_tag_text, int32_t, (uint64_t entity, char *utf8, int32_t capacity)) \
+    X(entity, spawn, int32_t, (const conjure_spawn_desc *desc, uint64_t *outEntities)) \
+    X(camera, main, uint64_t, (void)) \
+    X(camera, screen_ray, int32_t, \
+      (uint64_t camera, const conjure_vec2 *screenPixels, conjure_vec3 *outOrigin, conjure_vec3 *outDirection)) \
+    X(camera, screen_to_world, int32_t, \
+      (uint64_t camera, const conjure_vec3 *screenPixelsAndDepth, conjure_vec3 *outWorld)) \
+    X(camera, world_to_screen, int32_t, \
+      (uint64_t camera, const conjure_vec3 *world, conjure_vec3 *outScreenPixelsAndDepth)) \
     /* end of table */
 
 // X("<line>") per hashed line of the conjure_* records and enumerations of native_api.h
@@ -490,7 +520,13 @@
     X("uint8_t current_phase;") \
     X("uint8_t in_play_mode;") \
     X("conjure_input_block input;") \
-    X("uint8_t padding[8];") \
+    X("uint32_t screen_width;") \
+    X("uint32_t screen_height;") \
+    X("float content_scale_x;") \
+    X("float content_scale_y;") \
+    X("float ui_scale;") \
+    X("uint8_t window_state;") \
+    X("uint8_t padding[51];") \
     X("};") \
     X("struct conjure_create_request {") \
     X("uint64_t entity;") \
@@ -552,6 +588,8 @@
     X("float max_distance;") \
     X("uint32_t layer_mask;") \
     X("uint64_t ignore_entity;") \
+    X("uint32_t flags;") \
+    X("uint32_t pad;") \
     X("};") \
     X("struct conjure_shape_query {") \
     X("conjure_ray_query ray;") \
@@ -560,6 +598,7 @@
     X("conjure_vec3 half_extents;") \
     X("float radius;") \
     X("conjure_quat_xyzw rotation;") \
+    X("uint32_t pad_tail;") \
     X("};") \
     X("struct conjure_raycast_hit {") \
     X("uint64_t entity;") \
@@ -567,6 +606,8 @@
     X("conjure_vec3 normal;") \
     X("float distance;") \
     X("int32_t layer;") \
+    X("uint8_t is_trigger;") \
+    X("uint8_t pad[7];") \
     X("};") \
     X("struct conjure_asset_info {") \
     X("uint8_t state;") \
@@ -590,6 +631,38 @@
     X("uint32_t fixed_steps;") \
     X("uint32_t jobs_executed;") \
     X("uint64_t frame_memory_high_water;") \
+    X("uint64_t managed_allocated_bytes;") \
+    X("uint64_t managed_heap_bytes;") \
+    X("uint32_t managed_collections;") \
+    X("uint32_t managed_full_collections;") \
+    X("};") \
+    X("struct conjure_spawn_component {") \
+    X("uint32_t type_id;") \
+    X("uint32_t stride;") \
+    X("const void *data;") \
+    X("};") \
+    X("struct conjure_spawn_desc {") \
+    X("const conjure_spawn_component *components;") \
+    X("int32_t component_count;") \
+    X("int32_t count;") \
+    X("uint64_t parent;") \
+    X("uint32_t flags;") \
+    X("uint32_t pad;") \
+    X("};") \
+    X("struct conjure_managed_memory {") \
+    X("uint64_t thread_allocated_bytes;") \
+    X("uint64_t heap_bytes;") \
+    X("uint32_t gen0_collections;") \
+    X("uint32_t gen2_collections;") \
+    X("};") \
+    X("enum class conjure_query_flags : uint32_t {") \
+    X("NONE = 0,") \
+    X("INCLUDE_TRIGGERS = 1 << 0,") \
+    X("EXCLUDE_STATIC = 1 << 1,") \
+    X("};") \
+    X("enum class conjure_spawn_flags : uint32_t {") \
+    X("NONE = 0,") \
+    X("SCENE_ENTITIES = 1 << 0,") \
     X("};") \
     X("enum class conjure_force_mode : uint8_t {") \
     X("FORCE,") \
@@ -638,6 +711,8 @@
     X("int32_t (*collect_fields)(int32_t slot, uint8_t *buffer, int32_t capacity);") \
     X("int32_t (*collect_garbage)(void);") \
     X("int32_t (*shutdown)(void);") \
+    X("int32_t (*sample_memory)(conjure_managed_memory *out);") \
+    X("int32_t (*set_active)(const int32_t *slots, int32_t count, int32_t active);") \
     X("};") \
     /* end of records */
 // clang-format on

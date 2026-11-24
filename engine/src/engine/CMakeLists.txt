@@ -29,10 +29,12 @@ set(CONJURE_ENGINE_PUBLIC_HEADERS
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/frame_memory.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/frame_stats.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/game_layer.h
+    ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/game_screen.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/imgui_layer.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/layer.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/layer_stack.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/log_category.h
+    ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/main_camera.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/engine/project.h
 )
 
@@ -68,6 +70,7 @@ set(CONJURE_ENGINE_SOURCES
     layer.cpp
     layer_stack.cpp
     log_category.cpp
+    main_camera.cpp
     main_thread_queue.cpp
     main_thread_queue.h
     project.cpp

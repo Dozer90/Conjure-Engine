@@ -172,7 +172,7 @@ TEST_SUITE("bindings/bindings_subsystem") {
         scripting::null_script_host &host = static_cast<scripting::null_script_host &>(runtime.host());
         host.set_phase_hook([&](scripting::script_phase, f32) {
             conjure_query_scope scope = {};
-            REQUIRE(api.query_begin(transformIds.data(), 1, &scope) == 0);
+            REQUIRE(api.query_begin(transformIds.data(), 1, nullptr, 0, &scope) == 0);
             REQUIRE(app->context().world->is_locked());
             CHECK(api.entity_create_many(2, parent.value().to_u64(), created.data()) == 2);
             api.query_end(scope.scope_id);
@@ -218,7 +218,7 @@ TEST_SUITE("bindings/bindings_subsystem") {
         scripting::null_script_host &host = static_cast<scripting::null_script_host &>(runtime.host());
         host.set_phase_hook([&](scripting::script_phase, f32) {
             conjure_query_scope scope = {};
-            REQUIRE(api.query_begin(transformIds.data(), 1, &scope) == 0);
+            REQUIRE(api.query_begin(transformIds.data(), 1, nullptr, 0, &scope) == 0);
             CHECK(api.entity_create_many(1, 0, &created) == 1);
             CHECK(bindings::detail::pending_fixup_count() == 1);
             api.query_end(scope.scope_id);

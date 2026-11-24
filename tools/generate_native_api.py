@@ -425,7 +425,7 @@ def generate_hash_header(entries: list[entry], records: list[record], core_count
     lines.extend(typed_macro_lines(entries))
     lines.append("    /* end of table */")
     lines.append("")
-    lines.append("// The same for the entries after the bindings marker only (the ten bindings groups, R26/R64).")
+    lines.append("// The same for the entries after the bindings marker only (the eleven bindings groups, R26/R64).")
     lines.append("#define CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY(X) \\")
     lines.extend(typed_macro_lines(entries[core_count:]))
     lines.append("    /* end of table */")

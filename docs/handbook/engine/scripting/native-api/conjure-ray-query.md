@@ -32,10 +32,12 @@ struct conjure_ray_query
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
 <tr><td>public</td><td><code class="signature">direction</code></td><td><code class="signature"><a href="conjure-vec3.html">conjure_vec3</a></code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">flags</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">ignore_<wbr>entity</code></td><td><code class="signature">uint64_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">layer_mask</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">max_distance</code></td><td><code class="signature"><span class="k">float</span></code></td><td>—</td><td></td></tr>
 <tr><td>public</td><td><code class="signature">origin</code></td><td><code class="signature"><a href="conjure-vec3.html">conjure_vec3</a></code></td><td>—</td><td></td></tr>
+<tr><td>public</td><td><code class="signature">pad</code></td><td><code class="signature">uint32_t</code></td><td>—</td><td></td></tr>
 </tbody>
 </table>
 

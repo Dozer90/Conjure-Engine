@@ -55,6 +55,8 @@ backends.
 | `conjure/engine/game_layer.h`, `conjure/engine/imgui_layer.h`, `conjure/engine/debug_overlay_layer.h` | the three built-in layers |
 | `conjure/engine/engine_time.h`, `conjure/engine/fixed_step_clock.h`, `conjure/engine/engine_phase.h` | `engine_time`, `make_frame_info()`, `fixed_step_clock`, the phase helpers |
 | `conjure/engine/frame_stats.h`, `conjure/engine/frame_memory.h` | `frame_stats`, `frame_sample`, `frame_memory` |
+| `conjure/engine/game_screen.h` | `game_screen`, `game_screen_of()`, `monitor_ui_scale()` |
+| `conjure/engine/main_camera.h` | `find_main_camera()` |
 | `conjure/engine/exit_code.h`, `conjure/engine/engine_error.h`, `conjure/engine/engine_version.h` | `exit_code`, `engine_error`, the version constants |
 | `conjure/engine/export.h` | `export_pipeline`, `export_settings`, `export_report` |
 | `conjure/engine/diagnostics/check_registry.h` | `check_registry`, `check_record` |

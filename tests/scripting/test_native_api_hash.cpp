@@ -64,7 +64,7 @@ namespace {
 TEST_SUITE("scripting/native_api_hash") {
 
     TEST_CASE("native_api_hash - the generated constants describe the table") {
-        CHECK(CONJURE_NATIVE_API_ENTRY_COUNT == 127);
+        CHECK(CONJURE_NATIVE_API_ENTRY_COUNT == 132);
         CHECK(CONJURE_NATIVE_API_CORE_ENTRY_COUNT == 20);
         CHECK(NATIVE_API_ENTRY_COUNT == CONJURE_NATIVE_API_ENTRY_COUNT);
         CHECK(NATIVE_API_CORE_ENTRY_COUNT == CONJURE_NATIVE_API_CORE_ENTRY_COUNT);
@@ -115,7 +115,7 @@ TEST_SUITE("scripting/native_api_hash") {
             const usize frame = index_of(lines, "struct alignas(64) conjure_frame_block {");
             const usize frameEnd = index_of(lines, "};", frame);
             REQUIRE(frameEnd < lines.size());
-            CHECK(lines[frameEnd - 1] == "uint8_t padding[8];");
+            CHECK(lines[frameEnd - 1] == "uint8_t padding[51];");
         }
         SUBCASE("an enumeration lists its enumerators in order") {
             const usize forceMode = index_of(lines, "enum class conjure_force_mode : uint8_t {");
@@ -135,10 +135,25 @@ TEST_SUITE("scripting/native_api_hash") {
             CHECK(lines[native + 4] == "const conjure_frame_block *frame;");
             CHECK(lines[native + 5] == "};");
         }
-        SUBCASE("no line carries a default member initialiser") {
+        SUBCASE("an enumerator keeps its explicit value") {
+            const usize queryFlags = index_of(lines, "enum class conjure_query_flags : uint32_t {");
+            REQUIRE(queryFlags + 4 < lines.size());
+            CHECK(lines[queryFlags + 1] == "NONE = 0,");
+            CHECK(lines[queryFlags + 2] == "INCLUDE_TRIGGERS = 1 << 0,");
+            CHECK(lines[queryFlags + 3] == "EXCLUDE_STATIC = 1 << 1,");
+            CHECK(lines[queryFlags + 4] == "};");
+        }
+        SUBCASE("no struct member line carries a default member initialiser") {
+            bool inEnum = false;
             for (const std::string_view line : lines) {
                 CAPTURE(line);
-                CHECK(line.find('=') == std::string_view::npos);
+                if (line.starts_with("enum ")) {
+                    inEnum = true;
+                } else if (line == "};") {
+                    inEnum = false;
+                } else if (!inEnum) {
+                    CHECK(line.find('=') == std::string_view::npos);
+                }
             }
         }
     }

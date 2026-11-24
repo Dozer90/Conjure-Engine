@@ -334,7 +334,8 @@ public sealed class BindingAssetBindProbe : ScriptBehaviour
 /// Records the managed size of every ABI record of 15_bindings.md 2.4 (and of AssetRef&lt;T&gt;) plus the
 /// NativeFunction enum's extent, so the native test compares them with the C++ static_asserts: the
 /// BindingRecordSizesMatchDocumented and NativeFunctionEnumMatchesManifest cases of design 10. Offsets lists
-/// every field of every record as "Record.Field=offset;", so a swap of two same-size fields shows too.
+/// every field of the records as "Record.Field=offset;" (those native table version 3 added included), so a swap
+/// of two same-size fields shows too.
 /// </summary>
 public sealed class BindingRecordSizeProbe : ScriptBehaviour
 {
@@ -348,6 +349,11 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
     public int UuidData;
     public int CollisionRecord;
     public int AssetRefPrefab;
+    public int SpawnComponent;
+    public int SpawnDesc;
+    public int ManagedMemory;
+    public int FrameBlock;
+    public int PublicRaycastHit;
     public int NativeFunctionCount;
     public int EntryCount;
     public int LastFunction;
@@ -377,24 +383,33 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
         UuidData = Unsafe.SizeOf<UuidData>();
         CollisionRecord = Unsafe.SizeOf<CollisionRecord>();
         AssetRefPrefab = Unsafe.SizeOf<AssetRef<PrefabAsset>>();
+        SpawnComponent = Unsafe.SizeOf<SpawnComponent>();
+        SpawnDesc = Unsafe.SizeOf<SpawnDesc>();
+        ManagedMemory = Unsafe.SizeOf<ManagedMemory>();
+        FrameBlock = Unsafe.SizeOf<FrameBlock>();
+        PublicRaycastHit = Unsafe.SizeOf<Conjure.RaycastHit>();
         NativeFunctionCount = Enum.GetValues(typeof(NativeFunction)).Length;
         EntryCount = NativeApi.EntryCount;
-        LastFunction = (int)NativeFunction.EntityGetTagText;
+        LastFunction = (int)NativeFunction.CameraWorldToScreen;
     }
 
     // Field names are string literals, not nameof: several are pointers or fixed buffers, which this project
     // (no unsafe blocks) cannot name. Marshal offsets equal the managed ones: these records hold no bool or char.
+    // The public RaycastHit lists only the fields it shares with the native hit's tail: the layer and the
+    // private trigger byte.
     private void RecordOffsets()
     {
-        Add<RayQuery>("RayQuery", "Origin", "Direction", "MaxDistance", "LayerMask", "IgnoreEntity");
-        Add<ShapeQuery>(
-            "ShapeQuery", "Ray", "Shape", "Pad0", "Pad1", "Pad2", "HalfExtents", "Radius", "Rotation");
-        Add<Interop.RaycastHit>("RaycastHit", "Entity", "Point", "Normal", "Distance", "Layer");
+        Add<RayQuery>("RayQuery", "Origin", "Direction", "MaxDistance", "LayerMask", "IgnoreEntity", "Flags", "Pad");
+        Add<ShapeQuery>("ShapeQuery",
+            "Ray", "Shape", "Pad0", "Pad1", "Pad2", "HalfExtents", "Radius", "Rotation", "PadTail");
+        Add<Interop.RaycastHit>("RaycastHit", "Entity", "Point", "Normal", "Distance", "Layer", "IsTrigger");
+        Add<Conjure.RaycastHit>("PublicRaycastHit", "Layer", "_isTrigger");
         Add<AssetInfo>("AssetInfo", "State", "Pad0", "Pad1", "Pad2", "Version", "TypeId");
         Add<ModuleRecord>("ModuleRecord",
             "VersionMajor", "VersionMinor", "VersionPatch", "State", "Kind", "Pad0", "Pad1", "FeatureFlags");
-        Add<FrameStatsBlock>("FrameStatsBlock",
-            "FrameMs", "PhaseMs", "SubmitMs", "FixedSteps", "JobsExecuted", "FrameMemoryHighWater");
+        Add<FrameStatsBlock>("FrameStatsBlock", "FrameMs", "PhaseMs", "SubmitMs", "FixedSteps", "JobsExecuted",
+            "FrameMemoryHighWater", "ManagedAllocatedBytes", "ManagedHeapBytes", "ManagedCollections",
+            "ManagedFullCollections");
         Add<TransformData>("TransformData", "Position", "Rotation", "Scale");
         Add<UuidData>("UuidData", "High", "Low");
         Add<CollisionRecord>("CollisionRecord", "Slot", "Other", "Point", "Normal", "Impulse", "Kind");
@@ -411,7 +426,12 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
             "MouseDy", "ScrollX", "ScrollY", "MouseButtonsDown", "MouseButtonsPressed", "MouseButtonsReleased",
             "Gamepads");
         Add<FrameBlock>("FrameBlock", "TimeSeconds", "UnscaledTimeSeconds", "DeltaTime", "FixedDeltaTime",
-            "TimeScale", "FrameIndex", "FixedStepIndex", "CurrentPhase", "InPlayMode", "Input");
+            "TimeScale", "FrameIndex", "FixedStepIndex", "CurrentPhase", "InPlayMode", "Input", "ScreenWidth",
+            "ScreenHeight", "ContentScaleX", "ContentScaleY", "UiScale", "WindowState");
+        Add<SpawnComponent>("SpawnComponent", "TypeId", "Stride", "Data");
+        Add<SpawnDesc>("SpawnDesc", "Components", "ComponentCount", "Count", "Parent", "Flags", "Pad");
+        Add<ManagedMemory>("ManagedMemory",
+            "ThreadAllocatedBytes", "HeapBytes", "Gen0Collections", "Gen2Collections");
     }
 
     private void Add<T>(string record, params string[] fields)

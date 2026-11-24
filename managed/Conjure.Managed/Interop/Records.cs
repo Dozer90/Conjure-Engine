@@ -219,6 +219,9 @@ public unsafe struct QueryScope
     public ChunkViewData* Chunks;
 }
 
+/// <summary>
+/// conjure_ray_query (48 bytes); Flags is a set of the conjure_query_flags bits (QueryFlags).
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct RayQuery
 {
@@ -227,8 +230,13 @@ public struct RayQuery
     public float MaxDistance;
     public uint LayerMask;
     public ulong IgnoreEntity;
+    public uint Flags;
+    public uint Pad;
 }
 
+/// <summary>
+/// conjure_shape_query (88 bytes).
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct ShapeQuery
 {
@@ -240,9 +248,13 @@ public struct ShapeQuery
     public Vector3 HalfExtents;
     public float Radius;
     public Quaternion Rotation;
+    public uint PadTail;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// conjure_raycast_hit (48 bytes); IsTrigger is 1 for a trigger volume. Conjure.RaycastHit has the same layout.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Size = 48)]
 public struct RaycastHit
 {
     public ulong Entity;
@@ -250,6 +262,7 @@ public struct RaycastHit
     public Vector3 Normal;
     public float Distance;
     public int Layer;
+    public byte IsTrigger;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -276,6 +289,9 @@ public struct ModuleRecord
     public uint FeatureFlags;
 }
 
+/// <summary>
+/// conjure_frame_stats_block (88 bytes).
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct FrameStatsBlock
 {
@@ -285,6 +301,48 @@ public unsafe struct FrameStatsBlock
     public uint FixedSteps;
     public uint JobsExecuted;
     public ulong FrameMemoryHighWater;
+    public ulong ManagedAllocatedBytes;
+    public ulong ManagedHeapBytes;
+    public uint ManagedCollections;
+    public uint ManagedFullCollections;
+}
+
+/// <summary>
+/// conjure_spawn_component (16 bytes): one component of an entity_spawn request. Stride 0 broadcasts the one
+/// value at Data; a null Data takes the registered default value.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct SpawnComponent
+{
+    public uint TypeId;
+    public uint Stride;
+    public void* Data;
+}
+
+/// <summary>
+/// conjure_spawn_desc (32 bytes): an entity_spawn request; Flags is a set of the conjure_spawn_flags bits.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct SpawnDesc
+{
+    public SpawnComponent* Components;
+    public int ComponentCount;
+    public int Count;
+    public ulong Parent;
+    public uint Flags;
+    public uint Pad;
+}
+
+/// <summary>
+/// conjure_managed_memory (24 bytes): what the managed table's SampleMemory reports to native.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct ManagedMemory
+{
+    public ulong ThreadAllocatedBytes;
+    public ulong HeapBytes;
+    public uint Gen0Collections;
+    public uint Gen2Collections;
 }
 
 /// <summary>
@@ -307,14 +365,19 @@ internal static class RecordSizes
         if (sizeof(ManagedComponentDesc) != 56) { mismatch = "ManagedComponentDesc"; return false; }
         if (sizeof(ChunkViewData) != 80) { mismatch = "ChunkViewData"; return false; }
         if (sizeof(QueryScope) != 16) { mismatch = "QueryScope"; return false; }
-        if (sizeof(RayQuery) != 40) { mismatch = "RayQuery"; return false; }
-        if (sizeof(ShapeQuery) != 80) { mismatch = "ShapeQuery"; return false; }
-        if (sizeof(RaycastHit) != 40) { mismatch = "RaycastHit"; return false; }
+        if (sizeof(RayQuery) != 48) { mismatch = "RayQuery"; return false; }
+        if (sizeof(ShapeQuery) != 88) { mismatch = "ShapeQuery"; return false; }
+        if (sizeof(RaycastHit) != 48) { mismatch = "RaycastHit"; return false; }
+        if (sizeof(Conjure.RaycastHit) != 48) { mismatch = "Conjure.RaycastHit"; return false; }
         if (sizeof(AssetInfo) != 16) { mismatch = "AssetInfo"; return false; }
         if (sizeof(ModuleRecord) != 20) { mismatch = "ModuleRecord"; return false; }
-        if (sizeof(FrameStatsBlock) != 64) { mismatch = "FrameStatsBlock"; return false; }
+        if (sizeof(FrameStatsBlock) != 88) { mismatch = "FrameStatsBlock"; return false; }
+        if (sizeof(SpawnComponent) != 16) { mismatch = "SpawnComponent"; return false; }
+        if (sizeof(SpawnDesc) != 32) { mismatch = "SpawnDesc"; return false; }
+        if (sizeof(ManagedMemory) != 24) { mismatch = "ManagedMemory"; return false; }
         if (sizeof(GamepadState) != 40) { mismatch = "GamepadState"; return false; }
         if (sizeof(InputBlock) != FrameBlock.ExpectedInputSize) { mismatch = "InputBlock"; return false; }
+        if (sizeof(FrameBlock) != FrameBlock.ExpectedSize) { mismatch = "FrameBlock"; return false; }
         if ((int)Marshal.OffsetOf<FrameBlock>(nameof(FrameBlock.FrameIndex)) != FrameBlock.ExpectedFrameIndexOffset)
         {
             mismatch = "FrameBlock.FrameIndex";
@@ -323,6 +386,21 @@ internal static class RecordSizes
         if ((int)Marshal.OffsetOf<FrameBlock>(nameof(FrameBlock.Input)) != FrameBlock.ExpectedInputOffset)
         {
             mismatch = "FrameBlock.Input";
+            return false;
+        }
+        if ((int)Marshal.OffsetOf<FrameBlock>(nameof(FrameBlock.ScreenWidth)) != FrameBlock.ExpectedScreenWidthOffset)
+        {
+            mismatch = "FrameBlock.ScreenWidth";
+            return false;
+        }
+        if ((int)Marshal.OffsetOf<FrameBlock>(nameof(FrameBlock.UiScale)) != FrameBlock.ExpectedUiScaleOffset)
+        {
+            mismatch = "FrameBlock.UiScale";
+            return false;
+        }
+        if ((int)Marshal.OffsetOf<FrameBlock>(nameof(FrameBlock.WindowState)) != FrameBlock.ExpectedWindowStateOffset)
+        {
+            mismatch = "FrameBlock.WindowState";
             return false;
         }
         return true;

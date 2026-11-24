@@ -1,7 +1,7 @@
 {
-  "hash": "0x967165453AD419E1",
-  "version": 2,
-  "entryCount": 127,
+  "hash": "0xA9E2B0AC8F1DD13F",
+  "version": 3,
+  "entryCount": 132,
   "coreEntryCount": 20,
   "entries": [
     {
@@ -337,11 +337,19 @@
           "name": "count"
         },
         {
+          "type": "const uint32_t *",
+          "name": "withoutIds"
+        },
+        {
+          "type": "int32_t",
+          "name": "withoutCount"
+        },
+        {
           "type": "conjure_query_scope *",
           "name": "out"
         }
       ],
-      "signature": "int32_t (const uint32_t *ids, int32_t count, conjure_query_scope *out)"
+      "signature": "int32_t (const uint32_t *ids, int32_t count, const uint32_t *withoutIds, int32_t withoutCount, conjure_query_scope *out)"
     },
     {
       "index": 19,
@@ -1094,6 +1102,14 @@
           "name": "layerMask"
         },
         {
+          "type": "uint32_t",
+          "name": "flags"
+        },
+        {
+          "type": "uint64_t",
+          "name": "ignoreEntity"
+        },
+        {
           "type": "uint64_t *",
           "name": "out"
         },
@@ -1102,7 +1118,7 @@
           "name": "capacity"
         }
       ],
-      "signature": "int32_t (const conjure_vec3 *center, float radius, uint32_t layerMask, uint64_t *out, int32_t capacity)"
+      "signature": "int32_t (const conjure_vec3 *center, float radius, uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity)"
     },
     {
       "index": 63,
@@ -1127,6 +1143,14 @@
           "name": "layerMask"
         },
         {
+          "type": "uint32_t",
+          "name": "flags"
+        },
+        {
+          "type": "uint64_t",
+          "name": "ignoreEntity"
+        },
+        {
           "type": "uint64_t *",
           "name": "out"
         },
@@ -1135,7 +1159,7 @@
           "name": "capacity"
         }
       ],
-      "signature": "int32_t (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation, uint32_t layerMask, uint64_t *out, int32_t capacity)"
+      "signature": "int32_t (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation, uint32_t layerMask, uint32_t flags, uint64_t ignoreEntity, uint64_t *out, int32_t capacity)"
     },
     {
       "index": 64,
@@ -2249,6 +2273,98 @@
         }
       ],
       "signature": "int32_t (uint64_t entity, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 127,
+      "group": "entity",
+      "name": "spawn",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_spawn_desc *",
+          "name": "desc"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "outEntities"
+        }
+      ],
+      "signature": "int32_t (const conjure_spawn_desc *desc, uint64_t *outEntities)"
+    },
+    {
+      "index": 128,
+      "group": "camera",
+      "name": "main",
+      "returns": "uint64_t",
+      "args": [],
+      "signature": "uint64_t (void)"
+    },
+    {
+      "index": 129,
+      "group": "camera",
+      "name": "screen_ray",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "camera"
+        },
+        {
+          "type": "const conjure_vec2 *",
+          "name": "screenPixels"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "outOrigin"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "outDirection"
+        }
+      ],
+      "signature": "int32_t (uint64_t camera, const conjure_vec2 *screenPixels, conjure_vec3 *outOrigin, conjure_vec3 *outDirection)"
+    },
+    {
+      "index": 130,
+      "group": "camera",
+      "name": "screen_to_world",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "camera"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "screenPixelsAndDepth"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "outWorld"
+        }
+      ],
+      "signature": "int32_t (uint64_t camera, const conjure_vec3 *screenPixelsAndDepth, conjure_vec3 *outWorld)"
+    },
+    {
+      "index": 131,
+      "group": "camera",
+      "name": "world_to_screen",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "camera"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "world"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "outScreenPixelsAndDepth"
+        }
+      ],
+      "signature": "int32_t (uint64_t camera, const conjure_vec3 *world, conjure_vec3 *outScreenPixelsAndDepth)"
     }
   ],
   "records": [
@@ -2357,7 +2473,13 @@
         "uint8_t current_phase;",
         "uint8_t in_play_mode;",
         "conjure_input_block input;",
-        "uint8_t padding[8];"
+        "uint32_t screen_width;",
+        "uint32_t screen_height;",
+        "float content_scale_x;",
+        "float content_scale_y;",
+        "float ui_scale;",
+        "uint8_t window_state;",
+        "uint8_t padding[51];"
       ]
     },
     {
@@ -2450,7 +2572,9 @@
         "conjure_vec3 direction;",
         "float max_distance;",
         "uint32_t layer_mask;",
-        "uint64_t ignore_entity;"
+        "uint64_t ignore_entity;",
+        "uint32_t flags;",
+        "uint32_t pad;"
       ]
     },
     {
@@ -2462,7 +2586,8 @@
         "uint8_t pad[3];",
         "conjure_vec3 half_extents;",
         "float radius;",
-        "conjure_quat_xyzw rotation;"
+        "conjure_quat_xyzw rotation;",
+        "uint32_t pad_tail;"
       ]
     },
     {
@@ -2473,7 +2598,9 @@
         "conjure_vec3 point;",
         "conjure_vec3 normal;",
         "float distance;",
-        "int32_t layer;"
+        "int32_t layer;",
+        "uint8_t is_trigger;",
+        "uint8_t pad[7];"
       ]
     },
     {
@@ -2508,7 +2635,59 @@
         "float submit_ms;",
         "uint32_t fixed_steps;",
         "uint32_t jobs_executed;",
-        "uint64_t frame_memory_high_water;"
+        "uint64_t frame_memory_high_water;",
+        "uint64_t managed_allocated_bytes;",
+        "uint64_t managed_heap_bytes;",
+        "uint32_t managed_collections;",
+        "uint32_t managed_full_collections;"
+      ]
+    },
+    {
+      "name": "conjure_spawn_component",
+      "declaration": "struct conjure_spawn_component {",
+      "members": [
+        "uint32_t type_id;",
+        "uint32_t stride;",
+        "const void *data;"
+      ]
+    },
+    {
+      "name": "conjure_spawn_desc",
+      "declaration": "struct conjure_spawn_desc {",
+      "members": [
+        "const conjure_spawn_component *components;",
+        "int32_t component_count;",
+        "int32_t count;",
+        "uint64_t parent;",
+        "uint32_t flags;",
+        "uint32_t pad;"
+      ]
+    },
+    {
+      "name": "conjure_managed_memory",
+      "declaration": "struct conjure_managed_memory {",
+      "members": [
+        "uint64_t thread_allocated_bytes;",
+        "uint64_t heap_bytes;",
+        "uint32_t gen0_collections;",
+        "uint32_t gen2_collections;"
+      ]
+    },
+    {
+      "name": "conjure_query_flags",
+      "declaration": "enum class conjure_query_flags : uint32_t {",
+      "members": [
+        "NONE = 0,",
+        "INCLUDE_TRIGGERS = 1 << 0,",
+        "EXCLUDE_STATIC = 1 << 1,"
+      ]
+    },
+    {
+      "name": "conjure_spawn_flags",
+      "declaration": "enum class conjure_spawn_flags : uint32_t {",
+      "members": [
+        "NONE = 0,",
+        "SCENE_ENTITIES = 1 << 0,"
       ]
     },
     {
@@ -2584,7 +2763,9 @@
         "int32_t (*apply_fields)(int32_t slot, const uint8_t *blob, int32_t size);",
         "int32_t (*collect_fields)(int32_t slot, uint8_t *buffer, int32_t capacity);",
         "int32_t (*collect_garbage)(void);",
-        "int32_t (*shutdown)(void);"
+        "int32_t (*shutdown)(void);",
+        "int32_t (*sample_memory)(conjure_managed_memory *out);",
+        "int32_t (*set_active)(const int32_t *slots, int32_t count, int32_t active);"
       ]
     }
   ]

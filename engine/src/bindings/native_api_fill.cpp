@@ -111,6 +111,10 @@ namespace {
         if (group == "transform" || group == "entity" || group == "scene" || group == "prefab") {
             return context.world != nullptr && context.scenes != nullptr;
         }
+        if (group == "camera") {
+            // No GPU and no renderer instance: the camera entries read components and the screen.
+            return context.world != nullptr && context.scenes != nullptr;
+        }
         if (group == "physics") {
             return context.physics != nullptr && context.world != nullptr;
         }
@@ -176,6 +180,9 @@ bool conjure::bindings::group_compiled(std::string_view group) noexcept {
     }
     if (group == "audio") {
         return CONJURE_BINDINGS_GROUP_COMPILED(audio) == 1;
+    }
+    if (group == "camera") {
+        return CONJURE_BINDINGS_GROUP_COMPILED(camera) == 1;
     }
     return group == "transform" || group == "entity" || group == "scene" || group == "prefab" || group == "input"
       || group == "asset" || group == "diagnostics" || group == "modules";

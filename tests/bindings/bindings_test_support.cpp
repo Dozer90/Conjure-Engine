@@ -9,6 +9,7 @@
 #include "conjure/scene/prefab.h"
 #include "conjure/scene/register.h"
 #include "conjure/scene/scene_serializer.h"
+#include "conjure/scripting/script_class_registry.h"
 #include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_host.h"
 #include "engine/subsystems/audio_components.h"
@@ -178,6 +179,80 @@ std::filesystem::path bindings_test::test_scripts_assembly() {
 
 std::filesystem::path bindings_test::manifest_path() {
     return std::filesystem::path(CONJURE_BINDINGS_MANIFEST_PATH);
+}
+
+/*===========================================================================*/
+/*===========================================================================*/
+// managed_app
+
+bindings_test::managed_app::managed_app() {
+    engine::engine_config config = headless_config();
+    config.scripting.useNullHost = false;
+    config.scripting.managedDirectory = managed_directory();
+    config.scripting.gameAssembly = test_scripts_assembly();
+    mApp = make_app(config);
+    CONJURE_REQUIRE_OK(mApp->initialise());
+    REQUIRE(mApp->context().scripting != nullptr);
+    REQUIRE(mApp->context().scripting->is_assembly_loaded());
+}
+
+bindings_test::managed_app::~managed_app() {
+    shutdown();
+}
+
+scripting::script_runtime &bindings_test::managed_app::runtime() noexcept {
+    return *mApp->context().scripting;
+}
+
+ecs::entity bindings_test::managed_app::create(std::string_view name) {
+    const core::result<ecs::entity> created = mApp->context().scenes->active().create_entity(core::string_id(name));
+    REQUIRE(created.has_value());
+    return created.value();
+}
+
+scripting::script_entry_id bindings_test::managed_app::attach(
+  ecs::entity entity,
+  std::string_view className,
+  u32 frames,
+  std::string_view fieldsJson
+) {
+    const core::result<core::json::document> fields = core::json::document::parse(fieldsJson);
+    REQUIRE(fields.has_value());
+    const scripting::script_entry_id id =
+      runtime().add_script(entity, scripting::script_name_hash(className), fields.value().root());
+    REQUIRE(id.is_valid());
+    step(frames);
+    return id;
+}
+
+void bindings_test::managed_app::step(u32 frames) {
+    for (u32 frame = 0; frame < frames; ++frame) {
+        CONJURE_REQUIRE_OK(mApp->step_frame());
+    }
+}
+
+core::json::document bindings_test::managed_app::fields_of(scripting::script_entry_id id) {
+    core::result<core::json::document> collected = runtime().collect_entry_fields(id);
+    REQUIRE(collected.has_value());
+    return std::move(collected).value();
+}
+
+i64 bindings_test::managed_app::field_i64(scripting::script_entry_id id, std::string_view name) {
+    return fields_of(id).root()[name].as_i64(-1);
+}
+
+f64 bindings_test::managed_app::field_f64(scripting::script_entry_id id, std::string_view name) {
+    return fields_of(id).root()[name].as_f64(-1.0);
+}
+
+std::string bindings_test::managed_app::field_string(scripting::script_entry_id id, std::string_view name) {
+    return std::string(fields_of(id).root()[name].as_string());
+}
+
+void bindings_test::managed_app::shutdown() {
+    if (mApp != nullptr) {
+        mApp->shutdown();
+    }
 }
 
 

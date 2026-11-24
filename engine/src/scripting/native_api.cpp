@@ -283,7 +283,8 @@ core::result<void> conjure::scripting::validate_managed_api(const conjure_manage
     const bool complete = api.load_game_assembly != nullptr && api.unload_game_assembly != nullptr &&
       api.create_instances != nullptr && api.destroy_instances != nullptr && api.run_phase != nullptr &&
       api.dispatch_collisions != nullptr && api.apply_fields != nullptr && api.collect_fields != nullptr &&
-      api.collect_garbage != nullptr && api.shutdown != nullptr;
+      api.collect_garbage != nullptr && api.shutdown != nullptr && api.sample_memory != nullptr &&
+      api.set_active != nullptr;
     if (!complete) {
         return core::make_error(scripting_error::ABI_MISMATCH, "managed table has an unfilled function");
     }

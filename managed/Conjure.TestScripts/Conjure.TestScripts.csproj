@@ -8,13 +8,18 @@
     <ScriptVariant Condition="'$(ScriptVariant)' == ''">V1</ScriptVariant>
     <DefineConstants>$(DefineConstants);$(ScriptVariant)</DefineConstants>
     <DebugType>portable</DebugType>
+    <!-- Probes call the pointer forms of the DOD API (ComponentQuery.Begin(uint*, int, uint*, int)). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="BindingProbes.cs" />
+    <Compile Include="CameraProbes.cs" />
     <Compile Include="Collider.cs" />
     <Compile Include="DestroyProbe.cs" />
     <Compile Include="DodScripts.cs" />
+    <Compile Include="DrawProbe.cs" />
     <Compile Include="FieldKinds.cs" />
+    <Compile Include="FrameStatsProbe.cs" />
     <Compile Include="InspectorProbe.cs" />
     <Compile Include="LanguageVersionProbe.cs" />
     <Compile Include="LeakyTimer.cs" />
@@ -22,8 +27,10 @@
     <Compile Include="Mover.cs" />
     <Compile Include="NativeCallProbe.cs" />
     <Compile Include="Probes.cs" />
+    <Compile Include="QueryFlagsProbe.cs" />
     <Compile Include="RegressionProbes.cs" />
     <Compile Include="ReloadProbe.cs" />
+    <Compile Include="SpawnProbes.cs" />
     <Compile Include="Spawner.cs" />
     <Compile Include="Throwers.cs" />
   </ItemGroup>

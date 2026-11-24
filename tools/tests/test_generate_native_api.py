@@ -4,7 +4,8 @@
 Feeds small native_api.inl texts to parse_entries() and C types to cs_type() and asserts that every entry is
 read, commented entries are ignored (also when one comment kind holds the other's marker), an entry the generator
 cannot read fails the run instead of vanishing from the table, 'const' is dropped only as a word, and an entry of a
-core group appended after the bindings marker is a bindings entry (the real table ends with entity_get_tag_text).
+core group appended after the bindings marker is a bindings entry (the real table holds entity_get_tag_text
+after the marker and ends with camera_world_to_screen).
 Feeds small native_api.h texts to parse_records() and asserts that every conjure_* struct and enumeration is read as
 normalised lines (padding members included, default member initialisers and comments left out), that a member,
 enumerator, alignment or managed-callback change changes the layout hash while a cosmetic one does not (sweep F445),
@@ -113,15 +114,17 @@ def core_group_entry_after_marker_is_bindings(generator) -> None:
     assert entries[3].hashed_line == expected, entries[3].hashed_line
 
 
-def real_table_ends_with_tag_text(generator) -> None:
+def real_table_holds_tag_text_after_marker(generator) -> None:
     inl_text = generator.DEFAULT_INL.read_text(encoding="utf-8")
     entries, core_count = generator.parse_entries(inl_text)
-    last = entries[-1]
-    assert last.c_name == "entity_get_tag_text", last.c_name
-    assert last.index >= core_count, (last.index, core_count)
-    assert last.signature == "int32_t (uint64_t entity, char *utf8, int32_t capacity)", last.signature
-    parameters = [generator.cs_type(kind) for kind, _ in last.parameters()]
+    # Version 2 appended entity_get_tag_text; version 3 appended entity_spawn and the four camera entries after it.
+    tag_text = entries[-6]
+    assert tag_text.c_name == "entity_get_tag_text", tag_text.c_name
+    assert tag_text.index >= core_count, (tag_text.index, core_count)
+    assert tag_text.signature == "int32_t (uint64_t entity, char *utf8, int32_t capacity)", tag_text.signature
+    parameters = [generator.cs_type(kind) for kind, _ in tag_text.parameters()]
     assert parameters == ["ulong", "byte*", "int"], parameters
+    assert entries[-1].c_name == "camera_world_to_screen", entries[-1].c_name
 
 
 def const_removed_as_word(generator) -> None:
@@ -276,7 +279,12 @@ def real_header_records(generator) -> None:
     by_name = {item.name: item for item in records}
     managed = by_name["conjure_managed_api"].members
     assert managed[3] == "int32_t (*load_game_assembly)(const char *utf8Path, int32_t length);", managed
-    assert managed[-1] == "int32_t (*shutdown)(void);", managed
+    assert managed[-3] == "int32_t (*shutdown)(void);", managed
+    assert managed[-2] == "int32_t (*sample_memory)(conjure_managed_memory *out);", managed
+    assert managed[-1] == "int32_t (*set_active)(const int32_t *slots, int32_t count, int32_t active);", managed
+    assert by_name["conjure_query_flags"].members == [
+        "NONE = 0,", "INCLUDE_TRIGGERS = 1 << 0,", "EXCLUDE_STATIC = 1 << 1,"
+    ], by_name["conjure_query_flags"].members
     assert by_name["conjure_native_api"].members == [
         "uint32_t size;", "uint32_t version;", "uint64_t layout_hash;", "const conjure_frame_block *frame;"
     ], by_name["conjure_native_api"].members
@@ -299,7 +307,10 @@ def main() -> int:
             "generate_native_api - a core group's entry after the marker is a bindings entry",
             core_group_entry_after_marker_is_bindings,
         ),
-        ("generate_native_api - the real table ends with entity_get_tag_text", real_table_ends_with_tag_text),
+        (
+            "generate_native_api - the real table holds entity_get_tag_text after the marker",
+            real_table_holds_tag_text_after_marker,
+        ),
         ("generate_native_api - records, enumerations and table members are read as normalised lines", records_parsed),
         (
             "regression - code sweep F445 generate_native_api - a record or managed-table change changes the hash",

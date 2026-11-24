@@ -17,15 +17,19 @@ set(CONJURE_BINDINGS_TEST_SOURCES
     test_bindings_managed.cpp
     test_bindings_subsystem.cpp
     test_call_counters.cpp
+    test_debug_draw_engine.cpp
     test_diagnostics_bindings.cpp
     test_entity_bindings.cpp
+    test_entity_spawn_bindings.cpp
     test_input_bindings.cpp
     test_log_category.cpp
+    test_managed_frame_stats.cpp
     test_marshal.cpp
     test_modules_bindings.cpp
     test_native_api_entries.cpp
     test_prefab_scene_bindings.cpp
     test_span_scope_routing.cpp
+    test_spawn_managed.cpp
     test_transform_bindings.cpp
 )
 
@@ -47,9 +51,11 @@ if(TARGET conjure::audio)
     list(APPEND CONJURE_BINDINGS_TEST_DEPS conjure::audio)
 endif()
 if(TARGET conjure::renderer)
+    list(APPEND CONJURE_BINDINGS_TEST_SOURCES test_camera_bindings.cpp test_camera_managed.cpp)
     list(APPEND CONJURE_BINDINGS_TEST_DEPS conjure::renderer)
 endif()
 
+# ENGINE: test_debug_draw_engine.cpp runs the bindings inside a testing::headless_engine.
 conjure_add_test_module(bindings
     SOURCES
         ${CONJURE_BINDINGS_TEST_SOURCES}
@@ -57,6 +63,7 @@ conjure_add_test_module(bindings
         ${CONJURE_BINDINGS_TEST_DEPS}
     LABELS bindings
     TIMEOUT 300
+    ENGINE
 )
 
 # The manifest the generator wrote and, when the SDK is built, the managed outputs the [dotnet] cases load.

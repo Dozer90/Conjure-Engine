@@ -81,24 +81,13 @@ namespace {
     constexpr std::string_view OTHER_PREFAB_PATH = "assets://prefabs/other.prefab";
 
     /// <summary>
-    /// A headless application over the real CLR with the test scripts loaded in PLAY mode and a clip asset
-    /// published under CLIP_PATH.
+    /// managed_app in PLAY mode with a clip asset published under CLIP_PATH.
     /// </summary>
-    struct managed_fixture {
-        std::unique_ptr<engine::application> app = nullptr;
+    struct managed_fixture : managed_app {
         assets::asset_id clip = test_uuid(3);
 
         managed_fixture() {
-            engine::engine_config config = headless_config();
-            config.scripting.useNullHost = false;
-            config.scripting.managedDirectory = managed_directory();
-            config.scripting.gameAssembly = test_scripts_assembly();
-            app = make_app(config);
-            CONJURE_REQUIRE_OK(app->initialise());
-            REQUIRE(app->context().scripting != nullptr);
-            REQUIRE(app->context().scripting->is_assembly_loaded());
-            REQUIRE(app->context().scripting->mode() == scripting::script_mode::PLAY);
-
+            REQUIRE(runtime().mode() == scripting::script_mode::PLAY);
             std::unique_ptr<assets::memory_asset_source> owned = std::make_unique<assets::memory_asset_source>();
             const std::vector<std::byte> wav = make_test_wav();
             const core::result<std::vector<std::byte>> cooked = audio::cook_clip(wav, audio::clip_import_settings{});
@@ -109,72 +98,16 @@ namespace {
             header.importerVersion = 1;
             header.id = clip;
             owned->add(assets::make_cooked_blob(header, {}, cooked.value()), CLIP_PATH);
-            app->context().assets->add_source(std::move(owned));
-        }
-
-        ~managed_fixture() {
-            app->shutdown();
-        }
-
-        managed_fixture(const managed_fixture &) = delete;
-        managed_fixture &operator=(const managed_fixture &) = delete;
-
-        [[nodiscard]] scripting::script_runtime &runtime() noexcept {
-            return *app->context().scripting;
-        }
-
-        [[nodiscard]] ecs::entity create(std::string_view name) {
-            const core::result<ecs::entity> created =
-              app->context().scenes->active().create_entity(core::string_id(name));
-            REQUIRE(created.has_value());
-            return created.value();
-        }
-
-        /// <summary>
-        /// Adds a script by class name and runs 'frames' engine frames so its callbacks execute.
-        /// </summary>
-        [[nodiscard]] scripting::script_entry_id attach(
-          ecs::entity entity,
-          std::string_view className,
-          u32 frames = 2
-        ) {
-            const core::json::document fields = core::json::document::object();
-            const scripting::script_entry_id id =
-              runtime().add_script(entity, scripting::script_name_hash(className), fields.root());
-            REQUIRE(id.is_valid());
-            step(frames);
-            return id;
-        }
-
-        void step(u32 frames) {
-            for (u32 frame = 0; frame < frames; ++frame) {
-                CONJURE_REQUIRE_OK(app->step_frame());
-            }
-        }
-
-        [[nodiscard]] core::json::document fields_of(scripting::script_entry_id id) {
-            core::result<core::json::document> collected = runtime().collect_entry_fields(id);
-            REQUIRE(collected.has_value());
-            return std::move(collected).value();
-        }
-
-        [[nodiscard]] i64 field_i64(scripting::script_entry_id id, std::string_view name) {
-            return fields_of(id).root()[name].as_i64(-1);
-        }
-
-        [[nodiscard]] std::string field_string(scripting::script_entry_id id, std::string_view name) {
-            return std::string(fields_of(id).root()[name].as_string());
-        }
-
-        [[nodiscard]] f64 field_f64(scripting::script_entry_id id, std::string_view name) {
-            return fields_of(id).root()[name].as_f64(-1.0);
+            app().context().assets->add_source(std::move(owned));
         }
     };
 
     /// <summary>
     /// "Record.Field=offset;" for every field of the C records the managed side mirrors, in the order
-    /// BindingRecordSizeProbe.RecordOffsets lists them. A managed PadN is byte N of the C 'pad' array, and the
-    /// frame block's tail 'padding' has no managed field.
+    /// BindingRecordSizeProbe.RecordOffsets lists them, version 3's fields and records included. A managed PadN
+    /// is byte N of the C 'pad' array; the raycast hit's tail 'pad' and the frame block's tail 'padding' have no
+    /// managed field. PublicRaycastHit is Conjure.RaycastHit, whose Layer and private trigger byte sit where the
+    /// native hit holds them.
     /// </summary>
     [[nodiscard]] std::string native_record_offsets() {
         std::string text = {};
@@ -186,6 +119,8 @@ namespace {
         add("RayQuery", "MaxDistance", offsetof(conjure_ray_query, max_distance));
         add("RayQuery", "LayerMask", offsetof(conjure_ray_query, layer_mask));
         add("RayQuery", "IgnoreEntity", offsetof(conjure_ray_query, ignore_entity));
+        add("RayQuery", "Flags", offsetof(conjure_ray_query, flags));
+        add("RayQuery", "Pad", offsetof(conjure_ray_query, pad));
         add("ShapeQuery", "Ray", offsetof(conjure_shape_query, ray));
         add("ShapeQuery", "Shape", offsetof(conjure_shape_query, shape));
         add("ShapeQuery", "Pad0", offsetof(conjure_shape_query, pad) + 0);
@@ -194,11 +129,15 @@ namespace {
         add("ShapeQuery", "HalfExtents", offsetof(conjure_shape_query, half_extents));
         add("ShapeQuery", "Radius", offsetof(conjure_shape_query, radius));
         add("ShapeQuery", "Rotation", offsetof(conjure_shape_query, rotation));
+        add("ShapeQuery", "PadTail", offsetof(conjure_shape_query, pad_tail));
         add("RaycastHit", "Entity", offsetof(conjure_raycast_hit, entity));
         add("RaycastHit", "Point", offsetof(conjure_raycast_hit, point));
         add("RaycastHit", "Normal", offsetof(conjure_raycast_hit, normal));
         add("RaycastHit", "Distance", offsetof(conjure_raycast_hit, distance));
         add("RaycastHit", "Layer", offsetof(conjure_raycast_hit, layer));
+        add("RaycastHit", "IsTrigger", offsetof(conjure_raycast_hit, is_trigger));
+        add("PublicRaycastHit", "Layer", offsetof(conjure_raycast_hit, layer));
+        add("PublicRaycastHit", "_isTrigger", offsetof(conjure_raycast_hit, is_trigger));
         add("AssetInfo", "State", offsetof(conjure_asset_info, state));
         add("AssetInfo", "Pad0", offsetof(conjure_asset_info, pad) + 0);
         add("AssetInfo", "Pad1", offsetof(conjure_asset_info, pad) + 1);
@@ -219,6 +158,14 @@ namespace {
         add("FrameStatsBlock", "FixedSteps", offsetof(conjure_frame_stats_block, fixed_steps));
         add("FrameStatsBlock", "JobsExecuted", offsetof(conjure_frame_stats_block, jobs_executed));
         add("FrameStatsBlock", "FrameMemoryHighWater", offsetof(conjure_frame_stats_block, frame_memory_high_water));
+        add("FrameStatsBlock", "ManagedAllocatedBytes", offsetof(conjure_frame_stats_block, managed_allocated_bytes));
+        add("FrameStatsBlock", "ManagedHeapBytes", offsetof(conjure_frame_stats_block, managed_heap_bytes));
+        add("FrameStatsBlock", "ManagedCollections", offsetof(conjure_frame_stats_block, managed_collections));
+        add(
+          "FrameStatsBlock",
+          "ManagedFullCollections",
+          offsetof(conjure_frame_stats_block, managed_full_collections)
+        );
         add("TransformData", "Position", offsetof(conjure_transform, position));
         add("TransformData", "Rotation", offsetof(conjure_transform, rotation));
         add("TransformData", "Scale", offsetof(conjure_transform, scale));
@@ -292,6 +239,25 @@ namespace {
         add("FrameBlock", "CurrentPhase", offsetof(conjure_frame_block, current_phase));
         add("FrameBlock", "InPlayMode", offsetof(conjure_frame_block, in_play_mode));
         add("FrameBlock", "Input", offsetof(conjure_frame_block, input));
+        add("FrameBlock", "ScreenWidth", offsetof(conjure_frame_block, screen_width));
+        add("FrameBlock", "ScreenHeight", offsetof(conjure_frame_block, screen_height));
+        add("FrameBlock", "ContentScaleX", offsetof(conjure_frame_block, content_scale_x));
+        add("FrameBlock", "ContentScaleY", offsetof(conjure_frame_block, content_scale_y));
+        add("FrameBlock", "UiScale", offsetof(conjure_frame_block, ui_scale));
+        add("FrameBlock", "WindowState", offsetof(conjure_frame_block, window_state));
+        add("SpawnComponent", "TypeId", offsetof(conjure_spawn_component, type_id));
+        add("SpawnComponent", "Stride", offsetof(conjure_spawn_component, stride));
+        add("SpawnComponent", "Data", offsetof(conjure_spawn_component, data));
+        add("SpawnDesc", "Components", offsetof(conjure_spawn_desc, components));
+        add("SpawnDesc", "ComponentCount", offsetof(conjure_spawn_desc, component_count));
+        add("SpawnDesc", "Count", offsetof(conjure_spawn_desc, count));
+        add("SpawnDesc", "Parent", offsetof(conjure_spawn_desc, parent));
+        add("SpawnDesc", "Flags", offsetof(conjure_spawn_desc, flags));
+        add("SpawnDesc", "Pad", offsetof(conjure_spawn_desc, pad));
+        add("ManagedMemory", "ThreadAllocatedBytes", offsetof(conjure_managed_memory, thread_allocated_bytes));
+        add("ManagedMemory", "HeapBytes", offsetof(conjure_managed_memory, heap_bytes));
+        add("ManagedMemory", "Gen0Collections", offsetof(conjure_managed_memory, gen0_collections));
+        add("ManagedMemory", "Gen2Collections", offsetof(conjure_managed_memory, gen2_collections));
         return text;
     }
 }
@@ -326,8 +292,8 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(call_count(native_function_id::diagnostics_check) >= 1);
         CHECK(call_count(native_function_id::diagnostics_call_count) >= 1);
         CHECK(call_count(native_function_id::modules_count) >= 1);
-        CHECK(fixture.app->context().checks->all_passed());
-        CHECK(fixture.app->context().checks->record_count() >= 1);
+        CHECK(fixture.app().context().checks->all_passed());
+        CHECK(fixture.app().context().checks->record_count() >= 1);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
@@ -378,8 +344,8 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(fixture.field_i64(probe, "MissingIsInvalid") == 1);
         CHECK(fixture.field_string(probe, "IdText") == fixture.clip.to_string());
         CHECK(fixture.field_i64(probe, "DurationMs") == 100);
-        CHECK(fixture.app->context().assets->state_of(fixture.clip) == assets::asset_state::LOADED);
-        scripting_bindings_subsystem *bindings = find_bindings(*fixture.app);
+        CHECK(fixture.app().context().assets->state_of(fixture.clip) == assets::asset_state::LOADED);
+        scripting_bindings_subsystem *bindings = find_bindings(fixture.app());
         REQUIRE(bindings != nullptr);
         CHECK(bindings->residency().holds(fixture.clip));
         fixture.step(1);
@@ -412,11 +378,11 @@ TEST_SUITE("bindings/bindings_managed") {
         const scripting::script_entry_id probe = fixture.attach(speaker, BIND_PROBE);
         CHECK(fixture.field_string(probe, "Errors").empty());
         CHECK(fixture.field_i64(probe, "Added") == 1);
-        const audio::audio_source *source = fixture.app->context().world->get<audio::audio_source>(speaker);
+        const audio::audio_source *source = fixture.app().context().world->get<audio::audio_source>(speaker);
         REQUIRE(source != nullptr);
         CHECK(source->clip.id() == fixture.clip);
         CHECK(source->clip.is_bound());
-        CHECK(source->clip.slot() == fixture.app->context().assets->bind_slot(fixture.clip));
+        CHECK(source->clip.slot() == fixture.app().context().assets->bind_slot(fixture.clip));
         CHECK(source->volume == 0.5f);
         CHECK(source->loop);
         CHECK(fixture.field_i64(probe, "VolumeReadPercent") == 50);
@@ -460,6 +426,11 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(fixture.field_i64(probe, "CollisionRecord") == static_cast<i64>(sizeof(conjure_collision_record)));
         const i64 assetRefSize = static_cast<i64>(sizeof(assets::asset_ref<scene::prefab_asset>));
         CHECK(fixture.field_i64(probe, "AssetRefPrefab") == assetRefSize);
+        CHECK(fixture.field_i64(probe, "PublicRaycastHit") == static_cast<i64>(sizeof(conjure_raycast_hit)));
+        CHECK(fixture.field_i64(probe, "SpawnComponent") == static_cast<i64>(sizeof(conjure_spawn_component)));
+        CHECK(fixture.field_i64(probe, "SpawnDesc") == static_cast<i64>(sizeof(conjure_spawn_desc)));
+        CHECK(fixture.field_i64(probe, "ManagedMemory") == static_cast<i64>(sizeof(conjure_managed_memory)));
+        CHECK(fixture.field_i64(probe, "FrameBlock") == static_cast<i64>(sizeof(conjure_frame_block)));
         CHECK(fixture.field_i64(probe, "NativeFunctionCount") == static_cast<i64>(NATIVE_FUNCTION_COUNT));
         CHECK(fixture.field_i64(probe, "EntryCount") == static_cast<i64>(NATIVE_FUNCTION_COUNT));
         CHECK(fixture.field_i64(probe, "LastFunction") == static_cast<i64>(NATIVE_FUNCTION_COUNT) - 1);
@@ -526,10 +497,10 @@ TEST_SUITE("bindings/bindings_managed") {
         const ecs::entity ground = fixture.create("ground");
         physics::rigid_body body = {};
         body.motionType = physics::motion_type::STATIC;
-        CONJURE_REQUIRE_OK(fixture.app->context().world->add<physics::rigid_body>(ground, body));
+        CONJURE_REQUIRE_OK(fixture.app().context().world->add<physics::rigid_body>(ground, body));
         physics::box_collider collider = {};
         collider.halfExtents = math::vec3(1.0f);
-        CONJURE_REQUIRE_OK(fixture.app->context().world->add<physics::box_collider>(ground, collider));
+        CONJURE_REQUIRE_OK(fixture.app().context().world->add<physics::box_collider>(ground, collider));
         fixture.step(1);
 
         const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), LAYER_MASK_PROBE);
@@ -560,7 +531,7 @@ TEST_SUITE("bindings/bindings_managed") {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};
         managed_fixture fixture = {};
-        ecs::world &world = *fixture.app->context().world;
+        ecs::world &world = *fixture.app().context().world;
 
         // A source whose clip native already bound: the three setters cost no asset_ref_bind.
         const ecs::entity speaker = fixture.create("speaker");
@@ -618,7 +589,7 @@ TEST_SUITE("bindings/bindings_managed") {
         const ecs::entity speaker = fixture.create("speaker");
         audio::audio_source source = {};
         source.playOnStart = false;
-        CONJURE_REQUIRE_OK(fixture.app->context().world->add<audio::audio_source>(speaker, source));
+        CONJURE_REQUIRE_OK(fixture.app().context().world->add<audio::audio_source>(speaker, source));
         const scripting::script_entry_id probe = fixture.attach(speaker, FACADE_EXISTS_PROBE);
         CHECK(fixture.field_i64(probe, "AudioSourceExists") == 1);
         CHECK(fixture.field_i64(probe, "RigidbodyExists") == 0);
@@ -666,14 +637,14 @@ TEST_SUITE("bindings/bindings_managed") {
         header.importerVersion = 1;
         header.id = prefab;
         owned->add(assets::make_cooked_blob(header, {}, std::vector<std::byte>(16)), OTHER_PREFAB_PATH);
-        fixture.app->context().assets->add_source(std::move(owned));
+        fixture.app().context().assets->add_source(std::move(owned));
 
         const ecs::entity speaker = fixture.create("speaker");
         const scripting::script_entry_id probe = fixture.attach(speaker, ASSET_MISMATCH_PROBE);
         CHECK(fixture.field_string(probe, "Errors").empty());
         CHECK(fixture.field_i64(probe, "BoundBefore") == 1);
         CHECK(fixture.field_i64(probe, "StillBound") == 0);
-        const audio::audio_source *source = fixture.app->context().world->get<audio::audio_source>(speaker);
+        const audio::audio_source *source = fixture.app().context().world->get<audio::audio_source>(speaker);
         REQUIRE(source != nullptr);
         CHECK(source->clip.id() == prefab);
         CHECK_FALSE(source->clip.is_bound());
@@ -858,7 +829,7 @@ TEST_SUITE("bindings/bindings_managed") {
         log_capture logs = {};
         managed_fixture fixture = {};
         reset_call_counters();
-        ecs::world &world = *fixture.app->context().world;
+        ecs::world &world = *fixture.app().context().world;
         const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), RESERVED_FACADE_PROBE);
         CHECK(fixture.field_string(probe, "Errors").empty());
         SUBCASE("inside the scope the writes are kept and the reads throw") {
@@ -910,7 +881,7 @@ TEST_SUITE("bindings/bindings_managed") {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};
         managed_fixture fixture = {};
-        scene::scene &active = fixture.app->context().scenes->active();
+        scene::scene &active = fixture.app().context().scenes->active();
         const ecs::entity source = fixture.create("lamp_root");
         const core::result<ecs::entity> child = active.create_entity(core::string_id("lamp_child"), source);
         CONJURE_REQUIRE_OK(child);
@@ -931,13 +902,13 @@ TEST_SUITE("bindings/bindings_managed") {
           assets::make_cooked_blob(header, {}, std::vector<std::byte>(bytes.begin(), bytes.end())),
           LAMP_PREFAB_PATH
         );
-        fixture.app->context().assets->add_source(std::move(owned));
-        const core::result<assets::asset_handle> loaded = fixture.app->context().assets->load_blocking(lamp);
+        fixture.app().context().assets->add_source(std::move(owned));
+        const core::result<assets::asset_handle> loaded = fixture.app().context().assets->load_blocking(lamp);
         CONJURE_REQUIRE_OK(loaded);
-        fixture.app->context().assets->pin(lamp, true);
+        fixture.app().context().assets->pin(lamp, true);
         CONJURE_REQUIRE_OK(active.destroy_now(source));
 
-        ecs::world &world = *fixture.app->context().world;
+        ecs::world &world = *fixture.app().context().world;
         const ecs::entity holder = fixture.create("probe");
         const u32 entitiesBefore = world.entity_count();
         const scripting::script_entry_id probe = fixture.attach(holder, RESERVED_PREFAB_DESTROY_PROBE);
@@ -951,7 +922,7 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(world.entity_count() == entitiesBefore);
         CONJURE_CHECK_OK(active.validate());
         CHECK(logs.count(core::log_level::ERR) == 0);
-        fixture.app->context().assets->pin(lamp, false);
+        fixture.app().context().assets->pin(lamp, false);
     }
 
     TEST_CASE(

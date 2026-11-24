@@ -839,6 +839,9 @@ nav:
               - "game_layer.h":
                   - handbook/engine/engine/game-layer.md
                   - "game_layer": handbook/engine/engine/game-layer/game-layer.md
+              - "game_screen.h":
+                  - handbook/engine/engine/game-screen.md
+                  - "game_screen": handbook/engine/engine/game-screen/game-screen.md
               - "imgui_layer.h":
                   - handbook/engine/engine/imgui-layer.md
                   - "imgui_layer": handbook/engine/engine/imgui-layer/imgui-layer.md
@@ -850,6 +853,7 @@ nav:
                   - handbook/engine/engine/layer-stack.md
                   - "layer_stack": handbook/engine/engine/layer-stack/layer-stack.md
               - "log_category.h": handbook/engine/engine/log-category.md
+              - "main_camera.h": handbook/engine/engine/main-camera.md
               - "project.h":
                   - handbook/engine/engine/project.md
                   - "project": handbook/engine/engine/project/project.md
@@ -1291,6 +1295,7 @@ nav:
                   - "conjure_input_block": handbook/engine/scripting/native-api/conjure-input-block.md
                   - "conjure_managed_api": handbook/engine/scripting/native-api/conjure-managed-api.md
                   - "conjure_managed_component_desc": handbook/engine/scripting/native-api/conjure-managed-component-desc.md
+                  - "conjure_managed_memory": handbook/engine/scripting/native-api/conjure-managed-memory.md
                   - "conjure_mat4": handbook/engine/scripting/native-api/conjure-mat4.md
                   - "conjure_module_record": handbook/engine/scripting/native-api/conjure-module-record.md
                   - "conjure_native_api": handbook/engine/scripting/native-api/conjure-native-api.md
@@ -1301,6 +1306,8 @@ nav:
                   - "conjure_script_class_desc": handbook/engine/scripting/native-api/conjure-script-class-desc.md
                   - "conjure_script_field_desc": handbook/engine/scripting/native-api/conjure-script-field-desc.md
                   - "conjure_shape_query": handbook/engine/scripting/native-api/conjure-shape-query.md
+                  - "conjure_spawn_component": handbook/engine/scripting/native-api/conjure-spawn-component.md
+                  - "conjure_spawn_desc": handbook/engine/scripting/native-api/conjure-spawn-desc.md
                   - "conjure_transform": handbook/engine/scripting/native-api/conjure-transform.md
                   - "conjure_uuid": handbook/engine/scripting/native-api/conjure-uuid.md
                   - "conjure_vec2": handbook/engine/scripting/native-api/conjure-vec2.md
@@ -1311,6 +1318,7 @@ nav:
               - "null_script_host.h":
                   - handbook/engine/scripting/null-script-host.md
                   - "null_host_recorder": handbook/engine/scripting/null-script-host/null-host-recorder.md
+                  - "null_host_recorder::activity_record": handbook/engine/scripting/null-script-host/null-host-recorder-activity-record.md
                   - "null_host_recorder::apply_record": handbook/engine/scripting/null-script-host/null-host-recorder-apply-record.md
                   - "null_host_recorder::collision_record": handbook/engine/scripting/null-script-host/null-host-recorder-collision-record.md
                   - "null_host_recorder::create_record": handbook/engine/scripting/null-script-host/null-host-recorder-create-record.md
@@ -1345,10 +1353,12 @@ nav:
               - "script_runtime.h":
                   - handbook/engine/scripting/script-runtime.md
                   - "collision_event": handbook/engine/scripting/script-runtime/collision-event.md
+                  - "managed_memory_delta": handbook/engine/scripting/script-runtime/managed-memory-delta.md
                   - "script_runtime": handbook/engine/scripting/script-runtime/script-runtime.md
                   - "script_runtime::deferred_reservation": handbook/engine/scripting/script-runtime/script-runtime-deferred-reservation.md
                   - "script_runtime::faulted_slot": handbook/engine/scripting/script-runtime/script-runtime-faulted-slot.md
                   - "script_runtime::pending_create": handbook/engine/scripting/script-runtime/script-runtime-pending-create.md
+                  - "script_runtime::query_cache_key": handbook/engine/scripting/script-runtime/script-runtime-query-cache-key.md
                   - "script_runtime::query_scope_state": handbook/engine/scripting/script-runtime/script-runtime-query-scope-state.md
                   - "script_runtime_config": handbook/engine/scripting/script-runtime/script-runtime-config.md
                   - "script_runtime_stats": handbook/engine/scripting/script-runtime/script-runtime-stats.md

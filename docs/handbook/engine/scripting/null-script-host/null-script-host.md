@@ -48,6 +48,7 @@ class CONJURE_API null_script_host final : public script_host
 <table class="variable-table">
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Hook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-activity-hook">activity_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Assembly<wbr>Loaded</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Collision<wbr>Hook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-collision-hook">collision_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mCreateHook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-create-hook">create_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
@@ -57,10 +58,12 @@ class CONJURE_API null_script_host final : public script_host
 <tr><td>private</td><td><code class="signature">m<wbr>Loaded<wbr>Assembly</code></td><td><code class="signature">std::string</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mLoadResult</code></td><td><code class="signature"><a href="../../core/types.html#symbol-i32">i32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mManagedApi</code></td><td><code class="signature"><a href="../native-api/conjure-managed-api.html">conjure_managed_api</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Managed<wbr>Memory</code></td><td><code class="signature"><a href="../native-api/conjure-managed-memory.html">conjure_managed_memory</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mNativeApi</code></td><td><code class="signature"><a href="../native-api/conjure-native-api.html">conjure_native_api</a> *</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mPhaseHook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-phase-hook">phase_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mRecorder</code></td><td><code class="signature"><a href="null-host-recorder.html">null_host_recorder</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mReloadHook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-create-hook">create_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Sample<wbr>Memory<wbr>Result</code></td><td><code class="signature"><a href="../../core/types.html#symbol-i32">i32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mSlots</code></td><td><code class="signature">std::vector&lt;<a href="null-script-host-slot-state.html">slot_state</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mStatus</code></td><td><code class="signature"><a href="../script-host.html#symbol-script-host-status">script_host_status</a></code></td><td><code class="signature">script_<wbr>host_<wbr>status::<wbr>UNINITIALISED</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Unload<wbr>Result</code></td><td><code class="signature"><a href="../../core/types.html#symbol-i32">i32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
@@ -112,6 +115,13 @@ class CONJURE_API null_script_host final : public script_host
 
 <div class="function-declaration" id="function-is-assembly-loaded-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_assembly_loaded() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
+#### `is_slot_active` {#function-is-slot-active}
+
+<div class="function-declaration" id="function-is-slot-active-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_slot_active(
+    <a href="../../core/types.html#symbol-i32">i32</a> slot) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True when the slot is live and active: a slot starts active unless its create request carried <code>CREATE_FLAG_INACTIVE</code>, and <code>set_active</code> changes it. This is what the managed side keeps per instance.</p>
+
 #### `is_slot_live` {#function-is-slot-live}
 
 <div class="function-declaration" id="function-is-slot-live-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_slot_live(
@@ -158,6 +168,11 @@ class CONJURE_API null_script_host final : public script_host
 
 <div class="function-declaration" id="function-reset-recorder-1"><pre><code><span class="k">void</span> reset_recorder();</code></pre></div>
 
+#### `set_activity_hook` {#function-set-activity-hook}
+
+<div class="function-declaration" id="function-set-activity-hook-1"><pre><code><span class="k">void</span> set_activity_hook(
+    <a href="../null-script-host.html#symbol-null-script-host-activity-hook">activity_hook</a> hook);</code></pre></div>
+
 #### `set_collect_override` {#function-set-collect-override}
 
 <div class="function-declaration" id="function-set-collect-override-1"><pre><code><span class="k">void</span> set_collect_override(
@@ -190,6 +205,13 @@ class CONJURE_API null_script_host final : public script_host
 
 <p>The value <code>load_game_assembly</code> returns (0 = success; a <code><a href="../scripting-error.html#symbol-scripting-error">scripting_error</a></code> code models a failed load).</p>
 
+#### `set_managed_memory` {#function-set-managed-memory}
+
+<div class="function-declaration" id="function-set-managed-memory-1"><pre><code><span class="k">void</span> set_managed_memory(
+    <span class="k">const</span> <a href="../native-api/conjure-managed-memory.html">conjure_managed_memory</a> &amp;memory) <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The counters <code>sample_memory</code> reports from now on (all 0 until set), standing in for the CLR&#x27;s. Like the CLR&#x27;s, every field but <code>heap_bytes</code> should only grow while the host lives; a test models a host restart by setting smaller values.</p>
+
 #### `set_phase_hook` {#function-set-phase-hook}
 
 <div class="function-declaration" id="function-set-phase-hook-1"><pre><code><span class="k">void</span> set_phase_hook(
@@ -206,6 +228,13 @@ class CONJURE_API null_script_host final : public script_host
 
 <div class="function-declaration" id="function-set-reload-hook-1"><pre><code><span class="k">void</span> set_reload_hook(
     <a href="../null-script-host.html#symbol-null-script-host-create-hook">create_hook</a> hook);</code></pre></div>
+
+#### `set_sample_memory_result` {#function-set-sample-memory-result}
+
+<div class="function-declaration" id="function-set-sample-memory-result-1"><pre><code><span class="k">void</span> set_sample_memory_result(
+    <a href="../../core/types.html#symbol-i32">i32</a> result) <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The value <code>sample_memory</code> returns (0 = success and <code>out</code> filled; a negative scripting status models a failed sample and leaves <code>out</code> untouched).</p>
 
 #### `set_unload_result` {#function-set-unload-result}
 
@@ -315,6 +344,18 @@ class CONJURE_API null_script_host final : public script_host
     <a href="../../core/types.html#symbol-u8">u8</a> phase,
     <a href="../../core/types.html#symbol-f32">f32</a> deltaTime);</code></pre></div>
 
+#### `sample_memory` {#function-sample-memory}
+
+<div class="function-declaration" id="function-sample-memory-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/types.html#symbol-i32">i32</a> sample_memory(
+    <a href="../native-api/conjure-managed-memory.html">conjure_managed_memory</a> *out);</code></pre></div>
+
+#### `set_active` {#function-set-active}
+
+<div class="function-declaration" id="function-set-active-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/types.html#symbol-i32">i32</a> set_active(
+    <span class="k">const</span> <a href="../../core/types.html#symbol-i32">i32</a> *slots,
+    <a href="../../core/types.html#symbol-i32">i32</a> count,
+    <a href="../../core/types.html#symbol-i32">i32</a> active);</code></pre></div>
+
 #### `shutdown_managed` {#function-shutdown-managed}
 
 <div class="function-declaration" id="function-shutdown-managed-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/types.html#symbol-i32">i32</a> shutdown_managed();</code></pre></div>
@@ -367,6 +408,18 @@ class CONJURE_API null_script_host final : public script_host
 <div class="function-declaration" id="function-trampoline-run-phase-1"><pre><code><span class="k">static</span> <a href="../../core/types.html#symbol-i32">i32</a> trampoline_run_phase(
     <a href="../../core/types.html#symbol-u8">u8</a> phase,
     <a href="../../core/types.html#symbol-f32">f32</a> deltaTime);</code></pre></div>
+
+#### `trampoline_sample_memory` {#function-trampoline-sample-memory}
+
+<div class="function-declaration" id="function-trampoline-sample-memory-1"><pre><code><span class="k">static</span> <a href="../../core/types.html#symbol-i32">i32</a> trampoline_sample_memory(
+    <a href="../native-api/conjure-managed-memory.html">conjure_managed_memory</a> *out);</code></pre></div>
+
+#### `trampoline_set_active` {#function-trampoline-set-active}
+
+<div class="function-declaration" id="function-trampoline-set-active-1"><pre><code><span class="k">static</span> <a href="../../core/types.html#symbol-i32">i32</a> trampoline_set_active(
+    <span class="k">const</span> <a href="../../core/types.html#symbol-i32">i32</a> *slots,
+    <a href="../../core/types.html#symbol-i32">i32</a> count,
+    <a href="../../core/types.html#symbol-i32">i32</a> active);</code></pre></div>
 
 #### `trampoline_shutdown` {#function-trampoline-shutdown}
 
