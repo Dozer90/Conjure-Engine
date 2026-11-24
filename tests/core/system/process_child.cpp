@@ -1,4 +1,4 @@
-// Helper program spawned by the core::process tests. The first argument selects a behaviour:
+// Helper program spawned by the core::process and core::file_lock tests. The first argument selects a behaviour:
 //
 //   echo <words...>        print the words separated by spaces, then a newline, to stdout
 //   stderr <words...>      same, to stderr
@@ -23,6 +23,17 @@
 //                          on Windows, where inheritance is limited to the standard handles
 //   wait-for <path>        poll every 5 ms until <path> exists, then exit 0; exit 4 after 60 s
 //                          so a child whose marker never appears does not linger
+//   lock-hold <path> <ready> <release>
+//                          core::file_lock::try_acquire(<path>, CREATE), then print "held", "busy" or
+//                          "error <CODE>"; when held, create <ready>, poll every 5 ms until <release> exists,
+//                          release the lock and exit 0 (exit 4 after 60 s, as wait-for does); busy exits 5 and
+//                          an error exits 3
+//   lock-abandon <path> <ready>
+//                          take and report the lock as lock-hold does (busy exits 5, an error 3), create
+//                          <ready>, then end with std::_Exit(0), which runs no destructor, so only the
+//                          operating system releases the lock
+//   lock-try <path>        core::file_lock::try_acquire(<path>, EXISTING), then print "acquired", "busy" or
+//                          "error <CODE>" and exit 0
 //
 // Anything else prints a usage line to stderr and exits with 2.
 //
@@ -33,8 +44,10 @@
 // dotnet's "build" or "--version"); otherwise the first line that does not start with "when " does.
 //
 // This is a test program, not engine code: the pid, zero-write, spawn-sleeper and fds modes need
-// the operating system directly, so the platform guard below is accepted here.
+// the operating system directly, so the platform guard below is accepted here. The lock modes link the
+// static core libraries (tests/core/system/CMakeLists.txt), so the program still needs no engine DLL.
 
+#include "conjure/core/file_lock.h"
 #include "conjure/core/platform_detect.h"
 
 #if CONJURE_PLATFORM_WINDOWS
@@ -56,6 +69,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if CONJURE_PLATFORM_WINDOWS
@@ -76,6 +90,9 @@ namespace {
 
 namespace {
     constexpr int USAGE_EXIT_CODE = 2;
+    constexpr int LOCK_ERROR_EXIT_CODE = 3;
+    constexpr int GIVE_UP_EXIT_CODE = 4;
+    constexpr int LOCK_BUSY_EXIT_CODE = 5;
 
     int usage(std::string_view mode) {
         std::cerr << "conjure_process_child: unknown mode '" << mode << "'\n";
@@ -304,22 +321,103 @@ namespace {
         return 0;
     }
 
-    // A marker file is the portable "go" signal: standard input is always the null device.
-    int wait_for(std::string_view path) {
-        constexpr int GIVE_UP_EXIT_CODE = 4;
+    // argv holds the narrow native encoding, which is what a std::string path is read as.
+    std::filesystem::path path_argument(std::string_view text) {
+        return std::filesystem::path(std::string(text));
+    }
+
+    // A marker file is the portable "go" signal: standard input is always the null device. Polls every 5 ms;
+    // false after 60 s, so a child whose marker never appears does not linger.
+    bool marker_appeared(const std::filesystem::path &marker) {
         constexpr std::chrono::seconds GIVE_UP_AFTER = std::chrono::seconds(60);
 
-        // argv holds the narrow native encoding, which is what a std::string path is read as.
-        const std::filesystem::path marker = std::filesystem::path(std::string(path));
         const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + GIVE_UP_AFTER;
         while (std::chrono::steady_clock::now() < deadline) {
             std::error_code ignored = {};
             if (std::filesystem::exists(marker, ignored)) {
-                return 0;
+                return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        return GIVE_UP_EXIT_CODE;
+        return false;
+    }
+
+    int wait_for(std::string_view path) {
+        return marker_appeared(path_argument(path)) ? 0 : GIVE_UP_EXIT_CODE;
+    }
+
+    bool create_marker(const std::filesystem::path &marker) {
+        std::ofstream stream(marker, std::ios::binary);
+        return stream.is_open();
+    }
+
+    // try_acquire with CREATE, printing the outcome. 0 when 'lock' now holds the file, otherwise the exit code of
+    // the lock modes for a busy file or an error.
+    int acquire_for_holding(std::string_view path, conjure::core::file_lock &lock) {
+        conjure::core::result<conjure::core::file_lock> acquired =
+          conjure::core::file_lock::try_acquire(path_argument(path), conjure::core::file_lock_open::CREATE);
+        if (!acquired.has_value()) {
+            std::cout << "error " << acquired.get_error().code_name() << '\n';
+            std::cout.flush();
+            return LOCK_ERROR_EXIT_CODE;
+        }
+        if (!acquired->held()) {
+            std::cout << "busy\n";
+            std::cout.flush();
+            return LOCK_BUSY_EXIT_CODE;
+        }
+
+        lock = std::move(*acquired);
+        std::cout << "held\n";
+        std::cout.flush();
+        return 0;
+    }
+
+    int lock_hold(std::string_view path, std::string_view ready, std::string_view release) {
+        conjure::core::file_lock lock = {};
+        const int acquireExitCode = acquire_for_holding(path, lock);
+        if (acquireExitCode != 0) {
+            return acquireExitCode;
+        }
+        if (!create_marker(path_argument(ready))) {
+            std::cerr << "conjure_process_child: cannot create the marker '" << ready << "'\n";
+            return LOCK_ERROR_EXIT_CODE;
+        }
+        if (!marker_appeared(path_argument(release))) {
+            return GIVE_UP_EXIT_CODE;
+        }
+
+        lock.release();
+        return 0;
+    }
+
+    int lock_abandon(std::string_view path, std::string_view ready) {
+        conjure::core::file_lock lock = {};
+        const int acquireExitCode = acquire_for_holding(path, lock);
+        if (acquireExitCode != 0) {
+            return acquireExitCode;
+        }
+        if (!create_marker(path_argument(ready))) {
+            std::cerr << "conjure_process_child: cannot create the marker '" << ready << "'\n";
+            return LOCK_ERROR_EXIT_CODE;
+        }
+
+        // No destructor runs and no stream is flushed: the process ends with the lock still held.
+        std::_Exit(0);
+    }
+
+    int lock_try(std::string_view path) {
+        const conjure::core::result<conjure::core::file_lock> acquired =
+          conjure::core::file_lock::try_acquire(path_argument(path), conjure::core::file_lock_open::EXISTING);
+        if (!acquired.has_value()) {
+            std::cout << "error " << acquired.get_error().code_name() << '\n';
+        } else if (acquired->held()) {
+            std::cout << "acquired\n";
+        } else {
+            std::cout << "busy\n";
+        }
+        std::cout.flush();
+        return 0;
     }
 }
 
@@ -418,6 +516,15 @@ int main(int argc, char **argv) {
     }
     if (mode == "wait-for") {
         return rest.empty() ? usage(mode) : wait_for(rest.front());
+    }
+    if (mode == "lock-hold") {
+        return rest.size() < 3 ? usage(mode) : lock_hold(rest[0], rest[1], rest[2]);
+    }
+    if (mode == "lock-abandon") {
+        return rest.size() < 2 ? usage(mode) : lock_abandon(rest[0], rest[1]);
+    }
+    if (mode == "lock-try") {
+        return rest.empty() ? usage(mode) : lock_try(rest.front());
     }
     return usage(mode);
 }

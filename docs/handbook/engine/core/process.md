@@ -34,6 +34,16 @@ kind: header
 class state;
 ```
 
+## Functions
+
+### Public
+
+#### `current_process_id` {#function-current-process-id}
+
+<div class="function-declaration" id="function-current-process-id-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="types.html#symbol-u32">u32</a> current_process_id() <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The operating system&#x27;s identifier of the calling <code><a href="process/process.html">process</a></code> (GetCurrentProcessId / getpid).</p>
+
 <!-- doc-content:notes:start -->
 
 <!-- doc-content:notes:end -->
@@ -57,7 +67,6 @@ class state;
 <a id="dependencies"></a>
 <a id="direct-header-dependencies"></a>
 <a id="extension-points"></a>
-<a id="functions"></a>
 <a id="internals-and-algorithms"></a>
 <a id="process"></a>
 <a id="process_desc"></a>

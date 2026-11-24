@@ -2,6 +2,7 @@
 
 // Helpers shared by the platform backends of the system area. Private to engine/src/core/system.
 
+#include "conjure/core/file_lock.h"
 #include "conjure/core/jobs/dedicated_thread.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
@@ -10,6 +11,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -219,4 +221,26 @@ namespace conjure::core::detail {
     /// core::system creates a thread, and through nothing else. It only ever grows. Thread-safe.
     /// </summary>
     [[nodiscard]] u64 started_pipe_reader_count() noexcept;
+
+    /// <summary>
+    /// The native value of a file_lock that holds nothing: INVALID_HANDLE_VALUE on Windows, no descriptor on POSIX.
+    /// </summary>
+    inline constexpr std::intptr_t FILE_LOCK_NOT_HELD = -1;
+
+    /// <summary>
+    /// The platform half of file_lock::try_acquire (file_lock_windows.cpp, file_lock_posix.cpp), called with
+    /// arguments already checked: the open, locked handle or descriptor, or FILE_LOCK_NOT_HELD when another holder
+    /// has the file. Never removes a file.
+    /// </summary>
+    [[nodiscard]] result<std::intptr_t> file_lock_open_native(const std::filesystem::path &path, file_lock_open open);
+
+    /// <summary>
+    /// Unlocks and closes a handle or descriptor file_lock_open_native returned.
+    /// </summary>
+    void file_lock_close_native(std::intptr_t native) noexcept;
+
+    /// <summary>
+    /// Deletes the file 'native' holds through 'path', then unlocks and closes 'native' on every outcome.
+    /// </summary>
+    [[nodiscard]] result<void> file_lock_remove_native(std::intptr_t native, const std::filesystem::path &path);
 }

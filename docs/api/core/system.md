@@ -3,16 +3,16 @@
 [API](../index.md)
 
 <!-- doc-content:purpose:start -->
-Three small operating-system services, all in `conjure::core`: run external tools with
+Four small operating-system services, all in `conjure::core`: run external tools with
 `conjure/core/process.h`, load plugins and modules at runtime with `conjure/core/dynamic_library.h`, and
-load, inspect and save PNG images with `conjure/core/image.h`. Nothing here needs a window, a GPU or a
-shell.
+load, inspect and save PNG images with `conjure/core/image.h`. `conjure/core/file_lock.h` holds a file locked
+against other processes. Nothing here needs a window, a GPU or a shell.
 <!-- doc-content:purpose:end -->
 
 |---|---|
 | Name | Processes, libraries and images |
 | Module | Core |
-| `#include` | `conjure/core/dynamic_library.h`, `conjure/core/image.h`, `conjure/core/process.h` |
+| `#include` | `conjure/core/dynamic_library.h`, `conjure/core/file_lock.h`, `conjure/core/image.h`, `conjure/core/process.h` |
 | Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
 ## Syntax

@@ -4,10 +4,19 @@
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
 
+#include "system_test_support.h"
+
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "core/jobs/thread_name.h"
 #include "core/system/system_internal.h"
+
+// current_process_id is compared with the operating system's own answer.
+#if CONJURE_PLATFORM_WINDOWS
+    #include <Windows.h>
+#else
+    #include <unistd.h>
+#endif
 
 #include <array>
 #include <atomic>
@@ -29,30 +38,38 @@
 using namespace conjure;
 using namespace conjure::core;
 
-namespace {
-    using steady_clock = std::chrono::steady_clock;
-
-    // Built next to the test executable by tests/core/system/CMakeLists.txt.
-    const std::filesystem::path CHILD_PATH = CONJURE_PROCESS_CHILD_PATH;
+// The conjure_process_child helpers system_test_support.h declares.
+namespace process_child_support {
+    const std::filesystem::path &child_path() {
+        static const std::filesystem::path CHILD_PATH = CONJURE_PROCESS_CHILD_PATH;
+        return CHILD_PATH;
+    }
 
     process_desc child(std::vector<std::string> arguments) {
         process_desc desc = {};
-        desc.executable = CHILD_PATH.generic_string();
+        desc.executable = child_path().generic_string();
         desc.arguments = std::move(arguments);
         return desc;
     }
+
+    std::string without_carriage_returns(std::string text) {
+        std::erase(text, '\r');
+        return text;
+    }
+}
+
+using process_child_support::child;
+using process_child_support::child_path;
+using process_child_support::without_carriage_returns;
+
+namespace {
+    using steady_clock = std::chrono::steady_clock;
 
     // Linux children shed inherited descriptors only when the backend can add a closefrom action
     // (system_internal.h); an older C library keeps the limitation documented in
     // engine/src/core/system/README.md.
     constexpr bool CHILDREN_INHERIT_ONLY_STANDARD_STREAMS =
       CONJURE_PLATFORM_LINUX == 0 || CONJURE_SPAWN_CLOSEFROM_AVAILABLE == 1;
-
-    // The child prints in text mode, which the Windows runtime turns into "\r\n" line endings.
-    std::string without_carriage_returns(std::string text) {
-        std::erase(text, '\r');
-        return text;
-    }
 
     // process_desc arguments are UTF-8.
     std::string utf8_of(const std::filesystem::path &path) {
@@ -71,6 +88,15 @@ namespace {
             }
         }
         return true;
+    }
+
+    // The calling process's identifier, asked of the operating system directly.
+    u32 operating_system_process_id() {
+#if CONJURE_PLATFORM_WINDOWS
+        return static_cast<u32>(GetCurrentProcessId());
+#else
+        return static_cast<u32>(getpid());
+#endif
     }
 
     // Polls until the child itself has exited (its grandchildren may live on).
@@ -300,7 +326,7 @@ TEST_SUITE("core/process") {
         const std::string withNul("a\0b", 3);
 
         process_desc badExecutable = child({"exit", "0"});
-        badExecutable.executable = CHILD_PATH.generic_string() + withNul;
+        badExecutable.executable = child_path().generic_string() + withNul;
         process_desc badArgument = child({"echo", withNul});
         process_desc badName = child({"exit", "0"});
         badName.environment = {{"CONJURE_FINE", "1"}, {withNul, "1"}};
@@ -878,10 +904,10 @@ TEST_SUITE("core/process") {
         // workingDirectory, so the helper is addressed relative to its own directory while the
         // child runs somewhere else.
         const testing::temp_directory directory("core_process_relative");
-        const scoped_current_path inChildDirectory(CHILD_PATH.parent_path());
+        const scoped_current_path inChildDirectory(child_path().parent_path());
 
         process_desc desc = {};
-        desc.executable = "./" + CHILD_PATH.filename().generic_string();
+        desc.executable = "./" + child_path().filename().generic_string();
         desc.arguments = {"cwd"};
         desc.workingDirectory = directory.path();
         const result<process_result> finished = process::run(desc);
@@ -909,6 +935,12 @@ TEST_SUITE("core/process") {
         const std::string printed = without_carriage_returns(finished->standardOutput);
         REQUIRE_FALSE(printed.empty());
         CHECK(std::stoull(printed) == reportedByParent);
+    }
+
+    TEST_CASE("process - current_process_id is the calling process's operating system id") {
+        const u32 reported = current_process_id();
+        CHECK(reported != 0);
+        CHECK(reported == operating_system_process_id());
     }
 
     TEST_CASE("process - children start with default signal dispositions") {

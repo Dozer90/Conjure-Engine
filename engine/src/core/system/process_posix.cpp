@@ -5,6 +5,7 @@
 
 #include "conjure/core/process.h"
 
+#include "core/system/posix_utils.h"
 #include "core/system/system_internal.h"
 #include "conjure/core/log.h"
 #include "conjure/core/platform_detect.h"
@@ -106,28 +107,8 @@ namespace {
             }
     };
 
-    std::string errno_message(int code) {
-        return std::system_category().message(code);
-    }
-
-    error_code error_code_from_errno(int code) noexcept {
-        switch (code) {
-            case ENOENT:
-            case ENOTDIR: {
-                return error_code::NOT_FOUND;
-            }
-            case EACCES:
-            case EPERM: {
-                return error_code::PERMISSION_DENIED;
-            }
-            default: {
-                return error_code::BACKEND_FAILURE;
-            }
-        }
-    }
-
     error errno_error(int code, std::string_view what) {
-        return make_error(error_code_from_errno(code), "{}: {}", what, errno_message(code));
+        return make_error(detail::error_code_from_errno(code), "{}: {}", what, detail::errno_message(code));
     }
 
     // A pipe whose write end the child receives through dup2 in the spawn file actions. Both
@@ -658,10 +639,10 @@ result<process> process::start(const process_desc &desc) {
     posix_spawn_file_actions_destroy(&fileActions);
     if (spawnError != 0) {
         return make_error(
-          error_code_from_errno(spawnError),
+          detail::error_code_from_errno(spawnError),
           "cannot start '{}': {}",
           desc.executable,
-          errno_message(spawnError)
+          detail::errno_message(spawnError)
         );
     }
     launched.processId = processId;
@@ -713,4 +694,13 @@ conjure::u32 process::process_id() const noexcept {
         return 0;
     }
     return mState->process_id();
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Free functions
+
+conjure::u32 conjure::core::current_process_id() noexcept {
+    return static_cast<conjure::u32>(::getpid());
 }

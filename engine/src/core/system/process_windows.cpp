@@ -769,3 +769,12 @@ conjure::u32 process::process_id() const noexcept {
     }
     return mState->process_id();
 }
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Free functions
+
+conjure::u32 conjure::core::current_process_id() noexcept {
+    return GetCurrentProcessId();
+}

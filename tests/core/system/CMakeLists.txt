@@ -1,5 +1,6 @@
 # core/system tests. Besides the test executable this builds three helpers the tests exercise:
-#   conjure_process_child           - a tiny program process tests spawn (echo, exit codes, sleep, ...)
+#   conjure_process_child           - a tiny program process and file_lock tests spawn (echo, exit codes, sleep,
+#                                     holding a file_lock, ...)
 #   conjure_test_shared_library     - a tiny shared library dynamic_library tests load
 #   conjure_test_dependent_library  - a shared library that imports conjure_test_shared_library
 # All land in the same bin directory as the tests, which locate them through their build paths.
@@ -10,6 +11,9 @@ conjure_add_executable(conjure_process_child
     FOLDER "Tests"
 )
 target_include_directories(conjure_process_child PRIVATE "${PROJECT_SOURCE_DIR}/engine/include")
+# The lock modes use core::file_lock from a second process. The static core libraries keep the program free of
+# engine DLLs, so the copies that stand in for other tools (temp_directory.h replaying_copy) still run anywhere.
+target_link_libraries(conjure_process_child PRIVATE conjure::core_system)
 
 add_library(conjure_test_shared_library SHARED test_shared_library.cpp)
 target_include_directories(conjure_test_shared_library PRIVATE "${PROJECT_SOURCE_DIR}/engine/include")
@@ -52,7 +56,9 @@ endif()
 
 conjure_add_test_module(core_system
     SOURCES
+        system_test_support.h
         test_dynamic_library.cpp
+        test_file_lock.cpp
         test_image.cpp
         test_process.cpp
     DEPS

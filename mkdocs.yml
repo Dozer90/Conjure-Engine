@@ -468,6 +468,9 @@ nav:
                   - "reflect::reflect_traits<u8>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-u8.md
                   - "reflect::reflect_traits<uuid>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-uuid.md
                   - "std::formatter<conjure::core::reflect::field_kind>": handbook/engine/core/reflect/field-info/std-formatter-conjure-core-reflect-field-kind.md
+              - "file_lock.h":
+                  - handbook/engine/core/file-lock.md
+                  - "file_lock": handbook/engine/core/file-lock/file-lock.md
               - "file_system.h":
                   - handbook/engine/core/vfs/file-system.md
                   - "vfs::file": handbook/engine/core/vfs/file-system/vfs-file.md

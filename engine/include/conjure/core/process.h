@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-// Child processes.
+// Child processes, and the operating system's identifier of the calling process (current_process_id).
 //
 //   process_desc desc = {};
 //   desc.executable = "dotnet";
@@ -212,4 +212,9 @@ namespace conjure::core {
             /// </summary>
             [[nodiscard]] u32 process_id() const noexcept;
     };
+
+    /// <summary>
+    /// The operating system's identifier of the calling process (GetCurrentProcessId / getpid).
+    /// </summary>
+    [[nodiscard]] CONJURE_API u32 current_process_id() noexcept;
 }
